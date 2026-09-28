@@ -1,0 +1,4 @@
+interface:
+  display_name: "Relabel Memory"
+  short_description: "Classify memory loading labels safely"
+  default_prompt: "Use $relabel-memory to classify pending memory labels."

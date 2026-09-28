@@ -1,0 +1,494 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import os
+import json
+import sys
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+
+
+FRAMEWORK_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(FRAMEWORK_ROOT / "lib"))
+sys.path.insert(0, str(FRAMEWORK_ROOT / "clients"))
+
+from codex.adapter import CodexAdapter, load_handoff  # noqa: E402
+from codex.snapshot import export_snapshot  # noqa: E402
+from memory_framework.errors import MemoryFrameworkError, ValidationError  # noqa: E402
+from memory_framework.workspace import Workspace, discover_workspace  # noqa: E402
+
+
+UTILITY_COMMANDS = {
+    "login",
+    "logout",
+    "mcp",
+    "plugin",
+    "mcp-server",
+    "app-server",
+    "remote-control",
+    "completion",
+    "update",
+    "doctor",
+    "sandbox",
+    "debug",
+    "apply",
+    "archive",
+    "delete",
+    "unarchive",
+    "exec-server",
+    "features",
+    "help",
+}
+CLOUD_COMMANDS = {"cloud", "cloud-tasks"}
+CLOUD_UTILITY_SUBCOMMANDS = {"status", "list", "apply", "diff", "help"}
+GLOBAL_VALUE_OPTIONS = {
+    "-c",
+    "--config",
+    "--enable",
+    "--disable",
+    "--remote",
+    "--remote-auth-token-env",
+    "-i",
+    "--image",
+    "-m",
+    "--model",
+    "--local-provider",
+    "-p",
+    "--profile",
+    "-s",
+    "--sandbox",
+    "-C",
+    "--cd",
+    "--add-dir",
+    "-a",
+    "--ask-for-approval",
+}
+@dataclass(frozen=True)
+class MemoryArguments:
+    remaining: list[str]
+    raw: bool = False
+    auto: bool = False
+    task: str | None = None
+    list_tasks: bool = False
+    snapshot: tuple[str, str] | None = None
+    include_local: bool = False
+
+
+def _parse_memory_arguments(argv: list[str]) -> MemoryArguments:
+    remaining: list[str] = []
+    raw = auto = list_tasks = include_local = False
+    task: str | None = None
+    snapshot: tuple[str, str] | None = None
+    index = 0
+    while index < len(argv):
+        argument = argv[index]
+        if argument == "--":
+            remaining.extend(argv[index:])
+            break
+        if argument == "--raw":
+            raw = True
+        elif argument == "--auto":
+            auto = True
+        elif argument == "--list":
+            list_tasks = True
+        elif argument == "--include-local":
+            include_local = True
+        elif argument == "--task" or argument.startswith("--task="):
+            if argument == "--task":
+                index += 1
+                if index >= len(argv):
+                    raise ValidationError("--task requires a task ID")
+                task = argv[index]
+            else:
+                task = argument.split("=", 1)[1]
+            if not task:
+                raise ValidationError("--task requires a task ID")
+        elif argument == "--snapshot":
+            if index + 2 >= len(argv):
+                raise ValidationError("--snapshot requires TASK and OUTPUT_DIR")
+            snapshot = (argv[index + 1], argv[index + 2])
+            index += 2
+        else:
+            remaining.extend(argv[index:])
+            break
+        index += 1
+    modes = sum(bool(item) for item in (raw, auto, task, list_tasks, snapshot))
+    if modes > 1:
+        raise ValidationError("choose only one of --raw, --auto, --task, --list, or --snapshot")
+    if include_local and snapshot is None:
+        raise ValidationError("--include-local is valid only with --snapshot")
+    return MemoryArguments(
+        remaining=remaining,
+        raw=raw,
+        auto=auto,
+        task=task,
+        list_tasks=list_tasks,
+        snapshot=snapshot,
+        include_local=include_local,
+    )
+
+
+def _option_has_inline_value(argument: str) -> bool:
+    return argument.startswith("--") and "=" in argument
+
+
+def _command_index(arguments: list[str]) -> int | None:
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument == "--":
+            return index + 1 if index + 1 < len(arguments) else None
+        if argument in GLOBAL_VALUE_OPTIONS:
+            index += 2
+            continue
+        if argument.startswith("-") or _option_has_inline_value(argument):
+            index += 1
+            continue
+        return index
+    return None
+
+
+def _is_utility(arguments: list[str]) -> bool:
+    if any(argument in {"-h", "--help", "-V", "--version"} for argument in arguments):
+        return True
+    index = _command_index(arguments)
+    if index is None:
+        return False
+    command = arguments[index]
+    if command == "debug" and _is_debug_llm_operation(arguments):
+        return False
+    if command in UTILITY_COMMANDS:
+        return True
+    if command not in CLOUD_COMMANDS:
+        return False
+    subcommand_index = index + 1
+    while subcommand_index < len(arguments):
+        value = arguments[subcommand_index]
+        if value in {"-c", "--config", "--enable", "--disable"}:
+            subcommand_index += 2
+            continue
+        if value.startswith("-"):
+            subcommand_index += 1
+            continue
+        return value in CLOUD_UTILITY_SUBCOMMANDS
+    return False
+
+
+def _is_cloud_llm_operation(arguments: list[str]) -> bool:
+    index = _command_index(arguments)
+    return index is not None and arguments[index] in CLOUD_COMMANDS and not _is_utility(arguments)
+
+
+def _is_debug_llm_operation(arguments: list[str]) -> bool:
+    index = _command_index(arguments)
+    if index is None or arguments[index] != "debug":
+        return False
+    words = [value for value in arguments[index + 1 :] if not value.startswith("-")]
+    return words[:2] == ["app-server", "send-message-v2"]
+
+
+def _unsupported_profile_operation(arguments: list[str]) -> str | None:
+    if _is_cloud_llm_operation(arguments):
+        return "Codex cloud"
+    if _is_debug_llm_operation(arguments):
+        return "Codex debug app-server send-message-v2"
+    return None
+
+
+def _is_continuation(arguments: list[str]) -> tuple[bool, bool]:
+    index = _command_index(arguments)
+    if index is None:
+        return False, False
+    command = arguments[index]
+    if command in {"resume", "fork"}:
+        return True, False
+    if command in {"exec", "e"}:
+        next_index = index + 1
+        while next_index < len(arguments):
+            value = arguments[next_index]
+            if value in GLOBAL_VALUE_OPTIONS:
+                next_index += 2
+                continue
+            if value.startswith("-"):
+                next_index += 1
+                continue
+            return value == "resume", value == "resume"
+    return False, False
+
+
+def _extract_new_request(arguments: list[str]) -> str | None:
+    index = _command_index(arguments)
+    if index is None:
+        return None
+    command = arguments[index]
+    if command in {"exec", "e", "review"}:
+        positional = [item for item in arguments[index + 1 :] if not item.startswith("-")]
+        if command in {"exec", "e"} and positional and positional[0] in {"resume", "review"}:
+            positional = positional[1:]
+        return positional[-1] if positional else None
+    if command in {"resume", "fork"} or command in UTILITY_COMMANDS:
+        return None
+    return command
+
+
+def _effective_cwd(arguments: list[str], process_cwd: Path) -> Path:
+    selected: str | None = None
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument in {"-C", "--cd"}:
+            if index + 1 >= len(arguments):
+                raise ValidationError(f"{argument} requires a directory")
+            selected = arguments[index + 1]
+            index += 1
+        elif argument.startswith("--cd="):
+            selected = argument.split("=", 1)[1]
+        index += 1
+    if selected is None:
+        return process_cwd
+    path = Path(selected).expanduser()
+    if not path.is_absolute():
+        path = process_cwd / path
+    return path.resolve()
+
+
+def _new_task_arguments(arguments: list[str], request: str) -> list[str]:
+    if not arguments:
+        return [request] if request else []
+    if arguments[-1] == "-":
+        return [*arguments[:-1], request]
+    return list(arguments)
+
+
+def _continued_task_arguments(arguments: list[str], session_id: str) -> list[str]:
+    index = _command_index(arguments)
+    prefix = arguments[:index] if index is not None else []
+    command = arguments[index] if index is not None else "resume"
+    if command in {"exec", "e"}:
+        return [
+            *prefix,
+            command,
+            "resume",
+            session_id,
+            "Continue the current request under the freshly selected task memory.",
+        ]
+    return [*prefix, "resume", session_id]
+
+
+def _exec_passthrough(arguments: list[str]) -> None:
+    executable = os.environ.get("MEMORY_CODEX_BIN", "codex")
+    command = [executable, *arguments]
+    environment = os.environ.copy()
+    environment.pop("MEMORY_FRAMEWORK_HANDOFF", None)
+    try:
+        if os.sep not in executable:
+            os.execvpe(executable, command, environment)
+        os.execve(executable, command, environment)
+    except OSError as exc:
+        raise MemoryFrameworkError(f"cannot launch Codex executable {executable!r}: {exc}") from exc
+
+
+def _list(adapter: CodexAdapter) -> None:
+    for task_id, task in adapter.available_tasks().items():
+        marker = "built-in" if task.built_in else "standard"
+        print(f"{task_id}\t{marker}\t{task.title}")
+
+
+def _interactive_choice(adapter: CodexAdapter) -> tuple[str, str]:
+    tasks = list(adapter.available_tasks().items())
+    opened_terminal = None
+    try:
+        if sys.stdin.isatty():
+            input_stream = sys.stdin
+            output_stream = sys.stdout if sys.stdout.isatty() else sys.stderr
+        else:
+            try:
+                opened_terminal = open("/dev/tty", "r+", encoding="utf-8", buffering=1)
+            except OSError as exc:
+                raise ValidationError(
+                    "memory task selection requires a terminal; use --task TASK or --auto"
+                ) from exc
+            input_stream = output_stream = opened_terminal
+        print("Select a memory task type:", file=output_stream)
+        for index, (task_id, task) in enumerate(tasks, start=1):
+            marker = "built-in" if task.built_in else "standard"
+            print(f"  {index}. {task_id} [{marker}] — {task.title}", file=output_stream)
+        print(
+            f"  {len(tasks) + 1}. auto — automatic routing and memory administration",
+            file=output_stream,
+        )
+        output_stream.write("Task: ")
+        output_stream.flush()
+        choice = input_stream.readline().strip()
+        if not choice:
+            raise ValidationError("memory task selection ended without a choice")
+    finally:
+        if opened_terminal is not None:
+            opened_terminal.close()
+    if choice == "auto":
+        return "auto", ""
+    if choice.isdigit():
+        number = int(choice)
+        if number == len(tasks) + 1:
+            return "auto", ""
+        if 1 <= number <= len(tasks):
+            return "task", tasks[number - 1][0]
+    if choice in dict(tasks):
+        return "task", choice
+    raise ValidationError(f"unknown selection: {choice}")
+
+
+def _run_selected_task(
+    adapter: CodexAdapter, task_id: str, arguments: list[str]
+) -> None:
+    unsupported = _unsupported_profile_operation(arguments)
+    if unsupported is not None:
+        raise ValidationError(
+            f"cannot inject task memory into {unsupported}; "
+            "the upstream command rejects --profile or does not forward it to the LLM "
+            "(use --raw only for an explicit memory bypass)"
+        )
+    adapter.ensure_task_annotations(task_id)
+    profile_name, _ = adapter.build_task_profile(task_id)
+    if task_id in adapter.available_routing_tasks():
+        adapter.remember_selection(task_id, directory_hint=str(adapter.effective_cwd))
+    adapter.replace_with_task(profile_name, arguments)
+
+
+def _run_auto(adapter: CodexAdapter, arguments: list[str]) -> None:
+    continuation, _ = _is_continuation(arguments)
+    ephemeral = continuation and "--ephemeral" in arguments
+    handoff_dir = adapter.workspace.state_dir / "handoffs"
+    adapter.workspace.ensure_private_runtime_directory(handoff_dir)
+    handoff = handoff_dir / f"{uuid.uuid4().hex}.json"
+    nonce = uuid.uuid4().hex
+    profile_name, _ = adapter.build_auto_profile(
+        handoff,
+        nonce=nonce,
+        continuation=continuation,
+        ephemeral=ephemeral,
+    )
+    try:
+        resume_contract = None
+        if continuation:
+            resume_contract = json.dumps(
+                {
+                    "version": 1,
+                    "path": str(handoff),
+                    "nonce": nonce,
+                    "kind": "continue",
+                    "ephemeral": ephemeral,
+                },
+                separators=(",", ":"),
+            )
+        status = adapter.run_routing(
+            profile_name,
+            arguments,
+            handoff_contract=resume_contract,
+        )
+    finally:
+        adapter.release_profile(profile_name)
+    if status != 0:
+        raise MemoryFrameworkError(f"routing Codex exited with status {status}")
+    if not os.path.lexists(handoff):
+        return
+    try:
+        if ephemeral:
+            raise ValidationError("ephemeral resume cannot create a task handoff")
+        expected_request = None if continuation else _extract_new_request(arguments)
+        data = load_handoff(
+            handoff,
+            expected_nonce=nonce,
+            expected_kind="continue" if continuation else "new",
+            expected_request=expected_request,
+        )
+    finally:
+        handoff.unlink(missing_ok=True)
+    task_id = str(data["task"])
+    if task_id not in adapter.available_routing_tasks():
+        raise ValidationError(
+            f"Auto handoff must select a standard task, not a built-in or unknown task: {task_id}"
+        )
+    adapter.remember_selection(
+        task_id,
+        directory_hint=str(data.get("directory_hint") or adapter.effective_cwd),
+        normalized_intent=str(data.get("normalized_intent") or "") or None,
+        remember_similar=bool(data.get("remember", False)),
+    )
+    adapter.ensure_task_annotations(task_id)
+    final_profile, _ = adapter.build_task_profile(
+        task_id, session_note=str(data.get("memory_preference") or "")
+    )
+    final_arguments = (
+        _continued_task_arguments(arguments, str(data["session_id"]))
+        if continuation
+        else _new_task_arguments(arguments, str(data["request"]))
+    )
+    adapter.replace_with_task(final_profile, final_arguments)
+
+
+def main(argv: list[str] | None = None) -> int:
+    try:
+        memory = _parse_memory_arguments(list(sys.argv[1:] if argv is None else argv))
+        if memory.raw or (
+            not any((memory.auto, memory.task, memory.list_tasks, memory.snapshot))
+            and _is_utility(memory.remaining)
+        ):
+            _exec_passthrough(memory.remaining)
+            return 0
+
+        os.umask(0o077)
+        workspace = Workspace(discover_workspace())
+        process_cwd = Path.cwd().resolve()
+        effective_cwd = _effective_cwd(memory.remaining, process_cwd)
+        adapter = CodexAdapter(
+            workspace,
+            launch_cwd=process_cwd,
+            effective_cwd=effective_cwd,
+        )
+        adapter.validate_launch_arguments(memory.remaining)
+        adapter.cleanup_registrations()
+        if memory.list_tasks:
+            if memory.remaining:
+                raise ValidationError(f"unexpected arguments for --list: {' '.join(memory.remaining)}")
+            _list(adapter)
+            return 0
+        if memory.snapshot:
+            if memory.remaining:
+                raise ValidationError(
+                    f"unexpected arguments for --snapshot: {' '.join(memory.remaining)}"
+                )
+            task_id, output = memory.snapshot
+            print(export_snapshot(workspace, task_id, output, include_local=memory.include_local))
+            return 0
+        if memory.task:
+            _run_selected_task(adapter, memory.task, memory.remaining)
+            return 0
+        if not memory.auto:
+            mode, selection = _interactive_choice(adapter)
+            if mode == "task":
+                _run_selected_task(adapter, selection, memory.remaining)
+                return 0
+            unsupported = _unsupported_profile_operation(memory.remaining)
+            if unsupported is not None:
+                raise ValidationError(
+                    f"cannot inject Auto memory into {unsupported}; "
+                    "use --raw only for an explicit memory bypass"
+                )
+        else:
+            unsupported = _unsupported_profile_operation(memory.remaining)
+        if memory.auto and unsupported is not None:
+            raise ValidationError(
+                f"cannot inject Auto memory into {unsupported}; "
+                "use --raw only for an explicit memory bypass"
+            )
+        _run_auto(adapter, memory.remaining)
+    except MemoryFrameworkError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

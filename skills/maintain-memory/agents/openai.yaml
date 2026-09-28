@@ -1,0 +1,4 @@
+interface:
+  display_name: "Maintain Memory"
+  short_description: "Maintain records with single-submit updates"
+  default_prompt: "Use $maintain-memory to prepare and submit a durable memory record update."

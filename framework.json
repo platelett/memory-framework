@@ -1,0 +1,5 @@
+{
+  "kind": "memory-framework",
+  "release": "3.0.0",
+  "data_protocol": {"name": "workspace-memory", "generation": 3}
+}
