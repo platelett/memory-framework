@@ -104,6 +104,94 @@ def test_external_framework_discovers_bank_from_cwd(tmp_path):
     cwd.mkdir(parents=True)
     result = run(framework, "validate", cwd=cwd)
     assert result.returncode == 0 and json.loads(result.stdout)["records"] == 1
+    refused = run(framework, "init", cwd=cwd)
+    assert refused.returncode == 2 and "existing memory bank" in refused.stderr
+    assert not (cwd / ".memory").exists()
+
+
+def test_embedded_commands_use_parent_bank_from_unrelated_cwd(tmp_path):
+    root = tmp_path / "project"
+    framework = install(root / ".memory/framework")
+    workspace = bank(framework, root, "EMBEDDED_KNOWLEDGE")
+    result = run(framework, "Read when work concerns example behavior.", cwd=tmp_path, script="load.py")
+    assert result.returncode == 0 and "EMBEDDED_KNOWLEDGE" in result.stdout
+    rendered = run(framework, "render", "--task", "all-eager", cwd=tmp_path)
+    assert rendered.returncode == 0, rendered.stderr
+    assert Path(json.loads(rendered.stdout)["path"]).is_relative_to(workspace.memory_dir)
+    submission = tmp_path / "submission.json"
+    record = next(iter(load_records(workspace.records_dir).values()))
+    write_record(workspace, "reference", "docs", "example", "UPDATED_KNOWLEDGE")
+    write_json(submission, {"version": 1, "task": None, "records": {record.id: {"always": "always"}}})
+    updated = run(framework, "update", "submit", submission, cwd=tmp_path)
+    assert updated.returncode == 0, updated.stderr
+    prepared = run(framework, "relabel", "prepare", "--scope", "always", "--sharing", "shared", cwd=tmp_path)
+    assert prepared.returncode == 0, prepared.stderr
+    proposal_path = Path(prepared.stdout.strip())
+    proposal = json.loads(proposal_path.read_text())
+    proposal["decisions"]["always"][record.id] = "always"
+    write_json(proposal_path, proposal)
+    applied = run(framework, "relabel", "apply", prepared.stdout.strip(), cwd=tmp_path)
+    assert applied.returncode == 0, applied.stderr
+    for relative, args in [
+        ("bin/memory-codex", ["--list"]),
+        ("bin/memory-claude", ["--list"]),
+        ("skills/maintain-memory/scripts/cleanup_artifacts.py", ["--dry-run"]),
+    ]:
+        result = subprocess.run([sys.executable, str(framework / relative), *args],
+                                cwd=tmp_path, env=clean_env(), text=True, capture_output=True)
+        assert result.returncode == 0, result.stderr
+    assert not (tmp_path / ".memory").exists()
+
+
+@pytest.mark.parametrize("embedded", [False, True])
+def test_initialized_bank_tracks_shared_data_but_ignores_local_runtime(tmp_path, embedded):
+    source = install(tmp_path / "source")
+    root = tmp_path / "project"
+    root.mkdir()
+
+    def git(cwd, *args):
+        return subprocess.check_output(["git", *args], cwd=cwd, env=clean_env(), text=True)
+
+    git(root, "init", "-q")
+    framework = source
+    if embedded:
+        git(source, "init", "-q")
+        git(source, "add", ".")
+        git(source, "-c", "user.name=Test", "-c", "user.email=test@example.com",
+            "commit", "-qm", "Framework fixture")
+        git(root, "-c", "protocol.file.allow=always", "submodule", "add",
+            str(source), ".memory/framework")
+        framework = root / ".memory/framework"
+    result = run(framework, "--workspace", root, "init", cwd=root)
+    assert result.returncode == 0, result.stderr
+    ignored = [
+        "records/policy/local/private.md", "annotations/matrix.local.json",
+        "generated/views/prompt.md", "state/clients/codex/preferences.json",
+        "clients/codex/profiles/session.config.toml", "tools/__pycache__/tool.pyc",
+        "tools/compiled.pyc",
+    ]
+    shared = [
+        "records/policy/shared/rule.md", "records/reference/docs/fact.md",
+        "categories/reference/docs.md", "task-types/task.md", "tools/helper.py",
+    ]
+    for relative in ignored + shared:
+        path = root / ".memory" / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("fixture\n")
+    git(root, "add", ".memory")
+    tracked = set(git(root, "ls-files").splitlines())
+    assert all(f".memory/{path}" not in tracked for path in ignored)
+    assert all(f".memory/{path}" in tracked for path in shared)
+    assert {".memory/.gitignore", ".memory/protocol.json", ".memory/annotations/matrix.json"} <= tracked
+    if embedded:
+        assert git(root, "ls-files", "--stage", "--", ".memory/framework").startswith("160000 ")
+        assert not any(path.startswith(".memory/framework/") for path in tracked)
+    ignore = root / ".memory/.gitignore"
+    ignore.write_text(ignore.read_text() + "custom-local-file\n")
+    before = ignore.read_bytes()
+    refused = run(framework, "--workspace", root, "init", cwd=root)
+    assert refused.returncode == 2
+    assert ignore.read_bytes() == before
 
 
 @pytest.mark.parametrize("mutation", ["missing", "generation", "bool-generation", "snapshot", "extra"])

@@ -346,7 +346,7 @@ def main() -> int:
         "--workspace",
         type=Path,
         default=None,
-        help="workspace containing .memory (default: MEMORY_WORKSPACE or cwd discovery)",
+        help="workspace containing .memory (default: MEMORY_WORKSPACE, embedded parent, then cwd discovery)",
     )
     parser.add_argument(
         "--dry-run",

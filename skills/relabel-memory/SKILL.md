@@ -8,6 +8,8 @@ description: Classify and atomically apply v2 always/not-always and task eager/l
 Change annotation state only. Do not edit record prose, task descriptions, categories, tools, or
 authority. Pure annotation changes require no user confirmation and may block the user's request.
 Never edit `.memory/annotations/matrix*.json` or generated views directly.
+Bank commands automatically use the embedded framework's parent bank; `MEMORY_WORKSPACE` or
+an explicit `--workspace <path>` can select a different workspace.
 
 ## Choose a scope
 
@@ -26,7 +28,7 @@ Run shared and local scopes separately. If no local records exist, no local prop
 1. Create an immutable input corpus and unpublished proposal:
 
    ```bash
-   python3 "$MEMORY_FRAMEWORK_ROOT/scripts/memory.py" --workspace "$MEMORY_WORKSPACE" relabel prepare \
+   python3 "$MEMORY_FRAMEWORK_ROOT/scripts/memory.py" relabel prepare \
      --scope <pending|always|task|all> [--task <id>] --sharing <shared|local>
    ```
 
@@ -49,7 +51,7 @@ Run shared and local scopes separately. If no local records exist, no local prop
 4. Self-review completeness and semantic consistency without consulting old labels. Then apply:
 
    ```bash
-   python3 "$MEMORY_FRAMEWORK_ROOT/scripts/memory.py" --workspace "$MEMORY_WORKSPACE" relabel apply \
+   python3 "$MEMORY_FRAMEWORK_ROOT/scripts/memory.py" relabel apply \
      .memory/generated/relabel/<proposal-id>/proposal.json
    ```
 

@@ -101,6 +101,7 @@ def bank_manifest(root: Path, *, snapshot_ok: bool = False) -> dict:
 
 def discover_workspace(
     explicit: Path | str | None = None, *, framework_root: Path | None = None,
+    allow_missing: bool = False,
 ) -> Path:
     selected = explicit if explicit is not None else os.environ.get("MEMORY_WORKSPACE")
     if selected is not None:
@@ -112,4 +113,6 @@ def discover_workspace(
         if (candidate / ".memory").exists():
             # Do not silently skip an incompatible or undeclared nearer bank.
             return candidate
+    if allow_missing:
+        return current
     raise ValueError("no memory workspace found; supply --workspace or MEMORY_WORKSPACE")

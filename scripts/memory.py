@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -62,9 +61,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "init":
-            root = args.workspace or os.environ.get("MEMORY_WORKSPACE") or (
-                FRAMEWORK_ROOT.parent.parent if FRAMEWORK_ROOT.parent.name == ".memory" else Path.cwd()
-            )
+            root = discover_workspace(args.workspace, allow_missing=True)
             workspace = initialize_bank(root)
             print(json.dumps({"workspace": str(workspace.root), "protocol": workspace.bank_manifest}))
             return 0

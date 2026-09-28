@@ -16,10 +16,24 @@ from memory_protocol import discover_workspace as _discover_workspace
 
 FRAMEWORK_ROOT = Path(__file__).resolve().parents[2]
 
+DEFAULT_BANK_GITIGNORE = """# Machine-local knowledge and annotations
+/records/policy/local/
+/annotations/matrix.local.json
 
-def discover_workspace(explicit: Path | str | None = None) -> Path:
+# Generated views, client profiles, and runtime state
+/generated/
+/state/
+/clients/*/profiles/
+
+# Python caches
+__pycache__/
+*.py[cod]
+"""
+
+
+def discover_workspace(explicit: Path | str | None = None, *, allow_missing: bool = False) -> Path:
     try:
-        return _discover_workspace(explicit, framework_root=FRAMEWORK_ROOT)
+        return _discover_workspace(explicit, framework_root=FRAMEWORK_ROOT, allow_missing=allow_missing)
     except ValueError as exc:
         raise ValidationError(str(exc)) from exc
 
@@ -160,6 +174,7 @@ def initialize_bank(root: Path | str) -> Workspace:
         memory.mkdir(mode=0o700)
     for name in ("records", "categories", "task-types", "annotations", "tools"):
         (memory / name).mkdir(mode=0o700)
+    atomic_write_text(memory / ".gitignore", DEFAULT_BANK_GITIGNORE, mode=0o600)
     atomic_write_json(memory / "annotations" / "matrix.json", {"version": 2, "always": {}, "tasks": {}}, mode=0o600)
     atomic_write_json(memory / "protocol.json", {"kind": "bank", "protocol": DATA_PROTOCOL}, mode=0o600)
     return Workspace(target)

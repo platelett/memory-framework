@@ -7,6 +7,8 @@ description: Maintain protocol-3 workspace memory prose and structure with confi
 
 Treat the directory containing `.memory/` as one workspace. Keep current task state out of
 memory. Never edit generated views, profiles, or annotation matrices.
+Bank commands automatically use the embedded framework's parent bank; `MEMORY_WORKSPACE` or
+an explicit `--workspace <path>` can select a different workspace.
 
 ## Semantic record granularity
 
@@ -144,7 +146,7 @@ one source above another.
 6. Submit exactly once:
 
    ```bash
-   python3 "$MEMORY_FRAMEWORK_ROOT/scripts/memory.py" --workspace "$MEMORY_WORKSPACE" update submit \
+   python3 "$MEMORY_FRAMEWORK_ROOT/scripts/memory.py" update submit \
      .memory/generated/updates/<update-id>/submission.json
    ```
 
@@ -167,7 +169,7 @@ Only on an explicit cleanup request, and after the user has finished any uncommi
 or relabel transaction, run this one-command cleanup from the workspace root:
 
 ```bash
-python3 "$MEMORY_FRAMEWORK_ROOT/skills/maintain-memory/scripts/cleanup_artifacts.py" --workspace "$MEMORY_WORKSPACE"
+python3 "$MEMORY_FRAMEWORK_ROOT/skills/maintain-memory/scripts/cleanup_artifacts.py"
 ```
 
 Use `--dry-run` to inspect without deleting, or `--workspace <path>` when invoking the deployed

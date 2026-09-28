@@ -28,7 +28,27 @@ Programs validate declarations before data operations; there is no legacy-layout
 The machine contract is specified in [PROTOCOL.md](PROTOCOL.md) and enforced by
 `lib/memory_protocol.py` plus the record, task, category and matrix parsers.
 
-From this framework directory, create a data-only bank with:
+For a Git-managed workspace, install the framework as a submodule and initialize the bank
+from the workspace root:
+
+```bash
+git submodule add -b main https://github.com/platelett/memory-framework.git .memory/framework
+python3 .memory/framework/scripts/memory.py init
+git add .gitmodules .memory
+git commit -m "Initialize workspace memory"
+```
+
+Initialization creates `.memory/.gitignore`, excluding local policies, local annotations,
+generated files, runtime state, client profiles and Python caches. Shared records, categories,
+task definitions, shared annotations, record-bound tools and the protocol declaration remain
+trackable. The framework is not ignored: the parent repository tracks its submodule commit.
+Initialization does not run Git commands or edit shell configuration.
+
+After cloning a workspace with an existing bank, restore the pinned framework with
+`git submodule update --init -- .memory/framework`; do not run bank initialization again.
+Ignore rules do not untrack files already committed in an existing workspace.
+
+Alternatively, from an independently installed framework directory, create a data-only bank with:
 
 ```bash
 python3 scripts/memory.py --workspace /path/to/workspace init
@@ -41,7 +61,11 @@ embedded `framework/`; it refuses to reset an existing bank. Upgrades replace th
 installation as a unit and retain data. They do not copy instructions or skills into the bank.
 
 The following examples run from this framework directory. An embedded installation infers its
-parent bank; an external installation can set `MEMORY_WORKSPACE`.
+parent bank for every bank command, including initialization, loading, validation, rendering,
+updates, relabeling, cleanup and client launchers, regardless of the current directory.
+An external installation can set `MEMORY_WORKSPACE` or discover the nearest bank from cwd.
+With no existing bank or explicit selection, external initialization creates a bank in cwd.
+Explicit workspace selection remains available when operating on a different bank.
 
 ## Commands
 
