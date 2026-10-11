@@ -183,6 +183,13 @@ task views. Other task cells remain pending until their own next launch prefligh
 views, relabel corpora/proposals, launch instructions, profiles, and metrics are disposable;
 records, task definitions, and annotation matrices are the persistent semantic state.
 
+When explicitly retaining existing loading decisions, a submission may include
+`"retain_task_labels": true`. Every listed record must retain its existing
+always/not-always decision. Other task cells keep their original labels and
+record hashes, so edited records remain stale and unavailable for loading until
+that task's next annotation preflight. Retention never marks an old task
+decision fresh for new prose; omitted or false retains the normal clearing behavior.
+
 Task classification uses a recall-biased balance rather than an unconditional recall-first
 default: applicability frequency, miss cost, trigger recognizability, and attention cost all
 matter; a genuine tie goes to eager. Full bodies always display their `load_when` as an activation

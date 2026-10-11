@@ -522,3 +522,76 @@ def test_shared_and_local_matrices_do_not_leak(workspace):
     apply_relabel(workspace, local)
     assert set(read_json(workspace.matrix_path("local"))["always"]) == {"policy.local.personal"}
     assert "policy.local.personal" not in read_json(workspace.matrix_path("shared"))["always"]
+
+
+def retained_label_fixture(workspace):
+    path = write_record(workspace, "reference", "docs", "one", "ONE")
+    write_task(workspace, "build")
+    write_task(workspace, "check")
+    record = load_records(workspace.records_dir)["reference.docs.one"]
+    tasks = load_task_types(workspace.tasks_dir)
+    matrix = {
+        "version": 2,
+        "always": {record.id: {"label": "not-always", "record_hash": record.content_hash}},
+        "tasks": {
+            task_id: {
+                "task_hash": task_annotation_hash(tasks[task_id]),
+                "records": {record.id: {
+                    "label": label, "record_hash": record.content_hash,
+                    "always_label": "not-always",
+                }},
+            }
+            for task_id, label in (("build", "eager"), ("check", "lazy"))
+        },
+    }
+    write_json(workspace.matrix_path("shared"), matrix)
+    path.write_text(path.read_text().replace("ONE", "TWO"))
+    return matrix
+
+
+@pytest.mark.parametrize("retain", [True, False])
+def test_incremental_retention_keeps_other_labels_stale(workspace, tmp_path, retain):
+    before = retained_label_fixture(workspace)
+    submission = tmp_path / "retain.json"
+    write_json(submission, {
+        "version": 1, "task": "build", "retain_task_labels": retain,
+        "records": {"reference.docs.one": {"always": "not-always", "task_label": "eager"}},
+    })
+    result = submit_incremental_update(workspace, submission)
+    after = read_json(workspace.matrix_path("shared"))
+    record = load_records(workspace.records_dir)["reference.docs.one"]
+    assert after["always"][record.id]["label"] == before["always"][record.id]["label"]
+    assert after["tasks"]["build"]["records"][record.id]["record_hash"] == record.content_hash
+    if retain:
+        assert after["tasks"]["check"] == before["tasks"]["check"]
+        assert annotation_module.fresh_task_label(after, load_task_types(workspace.tasks_dir)["check"], record) is None
+        assert any("stale-task: shared/check/reference.docs.one" in issue for issue in result["remaining_coverage_issues"])
+    else:
+        assert record.id not in after["tasks"]["check"]["records"]
+    with pytest.raises(ValidationError):
+        render_task_view(workspace, "check")
+
+
+def test_incremental_retention_rejects_changed_always_without_mutation(workspace, tmp_path):
+    before = retained_label_fixture(workspace)
+    submission = tmp_path / "retain.json"
+    write_json(submission, {
+        "version": 1, "task": None, "retain_task_labels": True,
+        "records": {"reference.docs.one": {"always": "always"}},
+    })
+    with pytest.raises(PublicationError, match="unchanged existing always decision"):
+        submit_incremental_update(workspace, submission)
+    assert read_json(workspace.matrix_path("shared")) == before
+
+
+@pytest.mark.parametrize("invalid", [None, 1, "true"])
+def test_incremental_retention_requires_boolean(workspace, tmp_path, invalid):
+    before = retained_label_fixture(workspace)
+    submission = tmp_path / "retain.json"
+    write_json(submission, {
+        "version": 1, "task": None, "retain_task_labels": invalid,
+        "records": {"reference.docs.one": {"always": "not-always"}},
+    })
+    with pytest.raises(PublicationError, match="must be a boolean"):
+        submit_incremental_update(workspace, submission)
+    assert read_json(workspace.matrix_path("shared")) == before

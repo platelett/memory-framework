@@ -528,6 +528,9 @@ commands alone own matrix validation and mutation.
 3. Update only listed always cells and the active standard task cells. Remove
    obsolete cells for those records from other task rows so they remain visibly
    pending rather than silently inherited.
+   With explicit `retain_task_labels: true`, require unchanged existing always
+   decisions and preserve other task cells byte-for-byte instead. Their original
+   record hashes leave them stale; launch preflight still owns revalidation.
 4. Validate and atomically replace each affected sharing matrix and return every
    remaining coverage issue. Do not render task views. Pending cells stay out of
    main-session prompts and are classified once when that task is next launched.

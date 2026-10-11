@@ -31,8 +31,10 @@ def _load_submission(path: Path) -> dict[str, object]:
     if not isinstance(value, dict):
         raise PublicationError("incremental submission must be a JSON object")
     expected = {"version", "task", "records"}
-    if set(value) != expected or value.get("version") != UPDATE_VERSION:
+    if not expected <= set(value) <= expected | {"retain_task_labels"} or value.get("version") != UPDATE_VERSION:
         raise PublicationError("incremental submission schema or version is invalid")
+    if "retain_task_labels" in value and not isinstance(value["retain_task_labels"], bool):
+        raise PublicationError("retain_task_labels must be a boolean")
     if value["task"] is not None and not isinstance(value["task"], str):
         raise PublicationError("incremental submission task must be a string or null")
     decisions = value["records"]
@@ -59,6 +61,7 @@ def submit_incremental_update(
     submission = _load_submission(path)
     selected_task_id = submission["task"]
     decisions = submission["records"]
+    retain_task_labels = submission.get("retain_task_labels", False)
     assert isinstance(decisions, dict)
 
     with workspace.annotation_lock(mutable=True):
@@ -87,6 +90,12 @@ def submit_incremental_update(
                 )
             assert isinstance(raw_decision, dict)
             always_label = str(raw_decision["always"])
+            if retain_task_labels:
+                prior = matrix["always"].get(record_id)
+                if not isinstance(prior, dict) or prior.get("label") != always_label:
+                    raise PublicationError(
+                        f"retaining task labels requires an unchanged existing always decision: {record_id}"
+                    )
             task_label = raw_decision.get("task_label")
             task_annotation_required = (
                 always_label == "not-always"
@@ -130,7 +139,8 @@ def submit_incremental_update(
                 assert isinstance(row, dict)
                 row_records = row["records"]
                 assert isinstance(row_records, dict)
-                row_records.pop(record_id, None)
+                if not retain_task_labels:
+                    row_records.pop(record_id, None)
 
             if (
                 always_label == "not-always"
