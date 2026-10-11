@@ -13,6 +13,7 @@ sys.path.insert(0, str(FRAMEWORK_ROOT / "lib"))
 from memory_framework.errors import MemoryFrameworkError  # noqa: E402
 from memory_framework.relabel import apply_relabel, prepare_relabel  # noqa: E402
 from memory_framework.rendering import render_task_view  # noqa: E402
+from memory_framework.migrations import migrate_record_ids
 from memory_framework.updates import submit_incremental_update  # noqa: E402
 from memory_framework.validation import validate_workspace  # noqa: E402
 from memory_framework.workspace import Workspace, discover_workspace, initialize_bank  # noqa: E402
@@ -45,6 +46,11 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--sharing", required=True, choices=("shared", "local"))
     apply = relabel_commands.add_parser("apply", help="atomically apply a complete proposal")
     apply.add_argument("proposal", type=Path)
+
+    records = commands.add_parser("records", help="maintain explicitly reviewed record identity migrations")
+    record_commands = records.add_subparsers(dest="record_command", required=True)
+    migrate = record_commands.add_parser("migrate", help="preserve labels while migrating record IDs")
+    migrate.add_argument("plan", type=Path)
 
     update = commands.add_parser("update", help="submit an explicit incremental record update")
     update_commands = update.add_subparsers(dest="update_command", required=True)
@@ -93,6 +99,9 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 result = apply_relabel(workspace, args.proposal)
                 print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+        elif args.command == "records":
+            result = migrate_record_ids(workspace, args.plan)
+            print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
         else:
             result = submit_incremental_update(workspace, args.submission)
             print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))

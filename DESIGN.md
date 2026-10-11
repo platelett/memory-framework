@@ -857,3 +857,13 @@ at another location. Its parent directory provides a default data location only;
 protocol never records a framework path. Entry points use their own installation for imports,
 instructions, skills and loader commands. Every launcher propagates the selected framework and
 workspace roots to child processes. Historical audit backups are not maintained framework copies.
+
+### Approved record naming migrations
+
+`records migrate` publishes an explicitly approved naming-only source transition.
+Pinned prior global hashes guard concurrent edits. Global labels and task cell
+labels survive ID replacement. `record-aliases.json` maps opaque legacy lookup keys
+to canonical IDs; `record-versions.json` records the approved hash transitions.
+Selected-task preflight binds only that task's retained decisions when both the
+current source and global decision match the approved target. It invokes no
+classifier for those transitions. Future unapproved edits follow normal preflight.

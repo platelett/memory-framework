@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import sys
 import tomllib
 from pathlib import Path
@@ -31,6 +32,14 @@ def load_matches(
     records = workspace / ".memory" / "records"
     if not (workspace / ".memory").is_dir():
         raise ValueError(f"workspace has no .memory directory: {workspace}")
+    aliases_path = workspace / ".memory" / "record-aliases.json"
+    aliases = json.loads(aliases_path.read_text()) if aliases_path.exists() else {"version": 1, "ids": {}, "conditions": {}}
+    if not isinstance(aliases, dict) or set(aliases) != {"version", "ids", "conditions"} or aliases["version"] != 1:
+        raise ValueError("invalid record aliases")
+    if not isinstance(aliases["ids"], dict) or not isinstance(aliases["conditions"], dict):
+        raise ValueError("invalid record alias mappings")
+    alias_target = aliases["ids"].get(short_id) if short_id is not None else None
+    condition_targets = aliases["conditions"].get(hashlib.sha256(condition.encode()).hexdigest(), []) if condition is not None else []
     matches: list[str] = []
     for path in sorted(records.glob("*/*/*.md")):
         if exclude_local and path.parent == records / "policy" / "local":
@@ -52,7 +61,7 @@ def load_matches(
         if not isinstance(record_id, str) or not record_id:
             raise ValueError(f"{path}: missing record ID")
         key = record_key(record_id)
-        matched = key == short_id if short_id is not None else metadata.get("load_when") == condition
+        matched = (key == short_id or record_id == alias_target) if short_id is not None else (metadata.get("load_when") == condition or record_id in condition_targets)
         if matched:
             matches.append(
                 f"Short ID: {key}\n"

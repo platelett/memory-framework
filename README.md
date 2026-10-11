@@ -228,3 +228,13 @@ python3 tools/build_clean_package.py . /path/to/memory-framework-3.0.0.tar.gz
 
 The package whitelist contains runtime software only. Knowledge and local runtime state are
 never included. Source backups in the audit directory are historical snapshots, not maintained copies.
+
+Approved naming-only migrations use `memory.py records migrate PLAN`. The plan pins
+prior record hashes, an optional old-to-new ID mapping, condition aliases, and explicit
+`approved_name_change: true`. Apply the reviewed sources first. The framework retains
+every global and task loading decision, stores old short-ID aliases as opaque keys,
+and records the approved version transition. At the selected task's next launch,
+preflight automatically associates its existing decisions with the approved version
+without invoking a classifier. Other task rows remain untouched until their launch.
+Later content changes require ordinary classification; naming approval does not
+authorize them.

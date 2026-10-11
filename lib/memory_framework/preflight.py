@@ -7,6 +7,7 @@ from pathlib import Path
 from .annotations import coverage_issues, load_annotation_snapshot
 from .errors import ValidationError
 from .models import CoverageIssue, TaskType
+from .migrations import bind_approved_task_versions
 from .relabel import CLASSIFICATION_GUIDANCE, apply_relabel, prepare_relabel
 from .tasking import resolve_task
 from .workspace import Workspace, atomic_write_json
@@ -127,6 +128,7 @@ def prepare_annotation_preflight(
     *,
     include_local: bool = True,
 ) -> AnnotationPreflight:
+    bind_approved_task_versions(workspace, task_id, include_local=include_local)
     task, issues = relevant_task_issues(
         workspace,
         task_id,

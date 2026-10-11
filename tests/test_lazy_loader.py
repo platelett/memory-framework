@@ -17,7 +17,7 @@ from memory_framework.rendering import _record_block, _record_key, _render_lazy,
 
 
 LOADER = Path(__file__).resolve().parents[1] / "scripts/load.py"
-CONDITION = "Read when checking `x` with $HOME, $(touch sentinel), quotes ' and \" or 中文."
+CONDITION = "Read when checking `x` with $HOME, $(touch sentinel), quotes ' and \" or \u03bb."
 
 
 def records_with_shared_condition(workspace):
