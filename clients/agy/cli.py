@@ -191,12 +191,11 @@ def _interactive_choice(adapter: AgyAdapter) -> tuple[str, str]:
     tasks = list(adapter.available_tasks().items())
     try:
         with terminal_streams() as (input_stream, output_stream):
-            print("Select a memory task type:", file=output_stream)
-            for index, (task_id, task) in enumerate(tasks, start=1):
-                marker = "built-in" if task.built_in else "standard"
-                print(f"  {index}. {task_id} [{marker}] - {task.title}", file=output_stream)
+            print("Which memories should agy use?", file=output_stream)
+            for index, (task_id, _) in enumerate(tasks, start=1):
+                print(f"  {index}. {adapter.task_label(task_id)}", file=output_stream)
             print(
-                f"  {len(tasks) + 1}. auto - automatic routing and memory administration",
+                f"  {len(tasks) + 1}. {adapter.task_label('auto')}",
                 file=output_stream,
             )
             output_stream.write("Task: ")

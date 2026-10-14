@@ -12,6 +12,7 @@ from pathlib import Path
 from claude.adapter import ClaudeAdapter
 from agy.terminal import LaunchCancelled, terminal_streams
 from memory_framework.errors import MemoryFrameworkError, ValidationError
+from memory_framework.preflight import relevant_task_issues
 from memory_framework.rendering import render_auto_view
 from memory_framework.workspace import atomic_write_json, atomic_write_text
 
@@ -49,29 +50,50 @@ class AgyAdapter(ClaudeAdapter):
             if name == "--remote-control":
                 raise ValidationError("remote-control Memory lifetime is unverified; use --raw explicitly")
 
+    def task_label(self, mode: str) -> str:
+        labels = {
+            "all-lazy": "All memories, read when needed",
+            "all-eager": "All memories, loaded at startup",
+            "auto": "Choose memories automatically",
+        }
+        if mode in labels:
+            return labels[mode]
+        return self.available_tasks()[mode].title
+
     def confirm_launch(self, mode: str, *, continuation: bool) -> None:
         message = (
-            f"Memory / Antigravity startup: {mode}\n"
-            "  A generated main agent supplies Memory and basic coding/web tools.\n"
-            "  Custom agents, MCP tools and subagent orchestration are not inherited.\n"
-            "  AGENTS.md/GEMINI.md on the current directory's ancestry are included;\n"
-            "  other native rules retain agy's discovery and size limits:\n"
-            "  24,000 bytes per rule file / 20,000 tokens total (truncation or lazy demotion).\n"
-            "  Long-context/compaction retention is not yet verified.\n"
-            "  Pending/stale annotations use the existing Codex classifier before launch.\n"
+            f"\nStart agy with saved memory: {self.task_label(mode)}\n"
+            "  You can edit files, run commands and search the web.\n"
+            "  This mode does not include your connected services or other AI helpers.\n"
+            "  Memory support is experimental; reliability in long conversations is unverified.\n"
         )
+        if mode != "auto" and relevant_task_issues(self.workspace, mode)[1]:
+            message += "  Some memories need organizing first; this may use Codex before agy starts.\n"
         if continuation:
             message += (
-                "  RESUME: agy may keep the original agent prompt and old Memory.\n"
-                "  The selection above cannot guarantee replacement of that context.\n"
-                "  Use the original task; start a new session for revised Memory.\n"
+                "  Resuming a conversation may keep its old memories despite your selection.\n"
+                "  Start a new conversation to use changed memories or a different task.\n"
             )
+        details = (
+            "\nHow this mode works:\n"
+            "  A temporary custom main agent receives the full rendered Memory view and\n"
+            "  standalone global/ancestor AGENTS.md and GEMINI.md instructions.\n"
+            "  It provides file, shell and web tools, with agy's normal tool approval.\n"
+            "  Custom-agent tools, MCP integrations and subagent orchestration are not inherited.\n"
+            "  Native rule-file loading limits are separate from this injected prompt;\n"
+            "  the adapter does not truncate Memory to fit those limits.\n"
+            "  Memory retention after context compaction has not been verified.\n"
+            "  Pending/stale memory annotations use the existing Codex classifier before launch.\n"
+        )
+        if continuation:
+            details += "  On resume, agy may reuse the original agent prompt rather than this launch's prompt.\n"
         if self.accept_limitations:
             print(message + "Accepted for this invocation via --accept-limitations.", file=sys.stderr)
             return
         try:
             with terminal_streams() as (input_stream, output_stream):
-                output_stream.write(message + "Continue with these limitations? [y/N]: ")
+                prompt = "Start session? [y/N] (? for details): "
+                output_stream.write(message + prompt)
                 output_stream.flush()
                 while True:
                     answer = input_stream.readline()
@@ -82,7 +104,10 @@ class AgyAdapter(ClaudeAdapter):
                         return
                     if answer in {"", "n", "no"}:
                         raise LaunchCancelled("Launch cancelled.")
-                    output_stream.write("Please enter y or n (Enter cancels): ")
+                    if answer == "?":
+                        output_stream.write(details + "\n" + prompt)
+                    else:
+                        output_stream.write("Please enter y to start, n to cancel, or ? for details: ")
                     output_stream.flush()
         except OSError as exc:
             print(message, file=sys.stderr)

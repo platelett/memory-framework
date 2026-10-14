@@ -101,7 +101,7 @@ def test_interactive_confirmation_is_default_no_and_uses_tty(workspace, monkeypa
     else:
         with pytest.raises(LaunchCancelled, match="cancelled"):
             adapter.confirm_launch("all-lazy", continuation=True)
-    assert "RESUME" in terminal.getvalue()
+    assert "Resuming a conversation may keep its old memories" in terminal.getvalue()
     assert "[y/N]" in terminal.getvalue()
 
 
@@ -153,7 +153,9 @@ def test_real_tty_task_selection_then_confirmation_without_dev_tty(workspace, tm
     env, log = env_for(workspace, tmp_path)
     status, transcript = pty_invoke(workspace, env, [], b"1\nyes\n")
     assert status == 0, transcript
-    assert "Task:" in transcript and "Continue with these limitations?" in transcript
+    assert "Task:" in transcript and "Start session?" in transcript
+    assert "All memories, read when needed" in transcript
+    assert "[built-in]" not in transcript
     assert len(calls(log)) == 1
 
 
@@ -179,7 +181,26 @@ def test_invalid_confirmation_answer_reprompts(workspace, monkeypatch):
     output = io.StringIO()
     monkeypatch.setattr("agy.adapter.terminal_streams", lambda: nullcontext((io.StringIO("maybe\ny\n"), output)))
     AgyAdapter(workspace).confirm_launch("all-lazy", continuation=False)
-    assert "Please enter y or n" in output.getvalue()
+    assert "Please enter y to start, n to cancel, or ? for details" in output.getvalue()
+
+
+@pytest.mark.parametrize("answer,accepted", [("?\ny\n", True), ("?\nn\n", False), ("?\n", False)])
+def test_details_do_not_accept_launch_or_claim_rule_caps(workspace, monkeypatch, answer, accepted):
+    output = io.StringIO()
+    monkeypatch.setattr("agy.adapter.terminal_streams", lambda: nullcontext((io.StringIO(answer), output)))
+    adapter = AgyAdapter(workspace)
+    if accepted:
+        adapter.confirm_launch("all-lazy", continuation=False)
+    else:
+        with pytest.raises(LaunchCancelled):
+            adapter.confirm_launch("all-lazy", continuation=False)
+    summary, details = output.getvalue().split("How this mode works:")
+    assert "Custom-agent tools" not in summary and "Codex" not in summary
+    assert "Resuming" not in summary
+    assert "Native rule-file loading limits are separate" in details
+    assert "does not truncate Memory" in details
+    assert "24,000" not in output.getvalue() and "20,000" not in output.getvalue()
+    assert output.getvalue().count("Start session?") == 2
 
 
 def test_keyboard_interrupt_cancels_without_traceback(workspace, monkeypatch, capsys):
@@ -214,7 +235,7 @@ def test_standard_task_preflights_before_render_after_consent(workspace, tmp_pat
     result = invoke(workspace, env, "--accept-limitations", "--task", "build", "-p", "inspect")
     assert result.returncode == 0, result.stderr
     assert "Read when work concerns api behavior." in calls(log)[0]["body"]
-    assert "Codex classifier" in result.stderr
+    assert "Some memories need organizing first; this may use Codex" in result.stderr
 
 
 def test_auto_handoff_confirms_both_phases_and_preserves_request(workspace, tmp_path):
@@ -235,7 +256,7 @@ def test_resume_warns_and_keeps_native_arguments(workspace, tmp_path):
     args = ["--conversation", "2797a912-0fb9-4dd7-8cdf-833a89e8e7a4", "-p", "continue"]
     result = invoke(workspace, env, "--task", "all-lazy", "--accept-limitations", *args)
     assert result.returncode == 0, result.stderr
-    assert "original agent prompt" in result.stderr
+    assert "Resuming a conversation may keep its old memories" in result.stderr
     assert calls(log)[0]["argv"][2:] == args
 
 

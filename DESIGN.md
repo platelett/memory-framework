@@ -755,17 +755,28 @@ session. Auto continuation cannot create a second task handoff.
 
 `memory-agy` supports task selection, Auto new-request handoff, utility passthrough, explicit
 raw mode and snapshots. Before a normal/Auto process or its annotation preflight starts, it
-describes the selected mode and limitations and asks for confirmation using interactive stdin,
+names the selected memories and explains the supported features and practical limitations
+in a short summary, then asks for confirmation using interactive stdin,
 falling back to separate controlling-terminal read/write streams when stdin is redirected.
 The default is normal cancellation; redirected stdin cannot supply consent. Headless callers
 use `--accept-limitations` for this invocation. An Auto handoff confirms its target separately.
+`?` displays technical details and returns to the confirmation; viewing details never grants
+consent. Annotation-update notices appear only when that task has relevant coverage issues;
+the read-only check before consent does not classify or modify memories.
 
 The adapter materializes the complete rendered view and applicable standalone global/ancestor
 instruction files into a unique custom main agent. It preserves basic coding/web tools and
 native tool approval, not the default agent's arbitrary MCP or orchestration capabilities.
-The native rules subsystem retains its own size and discovery limits. No Memory record is
+The native rules subsystem retains its own size and discovery limits. Those file-loader
+limits are not established limits on the custom agent's injected system prompt, and the
+startup summary does not present them as Memory truncation risks. No Memory record is
 relabelled or truncated to meet those limits. Long-context/post-compaction retention is not
-claimed. These limitations are disclosed before launch, rather than silently claiming parity.
+claimed. Practical limitations are disclosed before launch.
+
+A native 1.3.5 probe loaded a 205,095-byte custom-agent system prompt with 30,000 padding
+words. A tool-free response recovered random markers at the beginning, middle and end;
+reported input usage was 33,508 tokens. This demonstrates loading beyond both native-rule
+budgets, without establishing an unlimited prompt capacity or compaction retention.
 
 The registered agent file is mode 0600 in an owner-only directory under the native global
 agent discovery root. PID/start-time leases and a content hash allow cleanup without removing

@@ -108,12 +108,16 @@ bin/memory-agy --snapshot all-lazy /path/to/new-agy-snapshot
 ### Antigravity startup confirmation
 
 `memory-agy` uses a generated custom main agent selected with `agy --agent`.
-Each normal or Auto launch displays its limitations and asks `Continue ... [y/N]`
+Each normal or Auto launch names the selected memories, explains available/unavailable
+features in plain language and asks `Start session? [y/N] (? for details)`
 using interactive stdin or the controlling terminal before any model call or annotation classification.
-Only `y` or `yes` proceeds. Redirected prompt input is never used as consent.
+Only `y` or `yes` proceeds. `?` shows implementation details and returns to the same
+question without accepting. Redirected prompt input is never used as consent.
 Declining, pressing Enter or ending input cancels normally; Ctrl+C exits without a traceback.
 Headless callers must supply `--accept-limitations` before native CLI arguments;
-this accepts only that invocation and still prints the limitations to stderr.
+this accepts only that invocation and still prints the summary to stderr.
+When the selected memories need annotation updates, the summary also explains that
+organizing them may use Codex before agy starts.
 An Auto handoff displays the selected task and confirms the second phase too.
 Utility commands, `--list`, snapshots and explicit `--raw` need no confirmation.
 
@@ -121,10 +125,12 @@ The generated agent contains the full selected Memory view, global standalone
 `AGENTS.md`/`GEMINI.md`, and those files on the launch directory's ancestry.
 It has file, shell and web tools, with native tool approval required; it does
 not inherit arbitrary custom-agent tools, MCP tools or subagent orchestration.
-Other native modular rules retain Antigravity's own discovery and limits:
-24,000 bytes per rule file and a 20,000-token aggregate rule budget can truncate
-or demote rules. These are native rule limits, not a truncation performed by
-the Memory renderer. Long-context and post-compaction retention remain unverified.
+The native rule loader, including native `AGENTS.md`/`GEMINI.md` loading, has its own
+24,000-byte per-file limit and a shared 20,000-token active-rule budget. These limits
+do not establish a limit on the custom agent's injected system prompt. The adapter
+does not truncate its rendered Memory or standalone instructions to fit those native
+rule budgets. No unlimited system-prompt capacity is claimed; model context still
+applies. Long-context and post-compaction retention remain unverified.
 
 On resume/continue, Antigravity 1.3.5 can retain the original agent prompt even
 when a newly generated agent is passed. The confirmation explicitly warns that
