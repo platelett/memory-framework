@@ -5,8 +5,8 @@ annotation matrices are authoritative; generated views and client profiles are d
 It ships with only the virtual task types `all-lazy` and `all-eager`.
 
 Requirements: Python 3.12+, POSIX file locking, and (for launching) a current Codex CLI or
-Claude Code CLI, or Antigravity CLI. Claude and Antigravity annotation preflight currently
-also require Codex when selected-task annotations are pending or stale.
+Claude Code CLI, or Antigravity CLI. Each client classifies its own pending/stale annotations;
+launching Claude or Antigravity does not require Codex.
 
 ## Framework and data boundary
 
@@ -108,16 +108,15 @@ bin/memory-agy --snapshot all-lazy /path/to/new-agy-snapshot
 ### Antigravity startup confirmation
 
 `memory-agy` uses a generated custom main agent selected with `agy --agent`.
-Each normal or Auto launch names the selected memories, explains available/unavailable
-features in plain language and asks `Start session? [y/N] (? for details)`
+Each normal or Auto launch names the selected memories, explains the missing integrations
+in plain language and asks `Start session? [y/N] (? for details)`
 using interactive stdin or the controlling terminal before any model call or annotation classification.
 Only `y` or `yes` proceeds. `?` shows implementation details and returns to the same
 question without accepting. Redirected prompt input is never used as consent.
 Declining, pressing Enter or ending input cancels normally; Ctrl+C exits without a traceback.
 Headless callers must supply `--accept-limitations` before native CLI arguments;
 this accepts only that invocation and still prints the summary to stderr.
-When the selected memories need annotation updates, the summary also explains that
-organizing them may use Codex before agy starts.
+Annotation updates show progress when agy actually prepares them, after consent.
 An Auto handoff displays the selected task and confirms the second phase too.
 Utility commands, `--list`, snapshots and explicit `--raw` need no confirmation.
 
@@ -130,7 +129,11 @@ The native rule loader, including native `AGENTS.md`/`GEMINI.md` loading, has it
 do not establish a limit on the custom agent's injected system prompt. The adapter
 does not truncate its rendered Memory or standalone instructions to fit those native
 rule budgets. No unlimited system-prompt capacity is claimed; model context still
-applies. Long-context and post-compaction retention remain unverified.
+applies. On current native 1.3.5, custom system instructions are built separately from
+compacted conversation history on model requests. Eager memories and the lazy loader/index
+therefore remain system instructions after history compaction. Lazy record bodies loaded
+as tool output may be summarized; the system-level loader instructions allow reloading them.
+See the version-specific binary analysis in `DESIGN.md`.
 
 On resume/continue, Antigravity 1.3.5 can retain the original agent prompt even
 when a newly generated agent is passed. The confirmation explicitly warns that

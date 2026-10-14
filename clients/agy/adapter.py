@@ -7,12 +7,13 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from claude.adapter import ClaudeAdapter
 from agy.terminal import LaunchCancelled, terminal_streams
 from memory_framework.errors import MemoryFrameworkError, ValidationError
-from memory_framework.preflight import relevant_task_issues
+from memory_framework.preflight import ANNOTATION_CLASSIFIER_INSTRUCTIONS
 from memory_framework.rendering import render_auto_view
 from memory_framework.workspace import atomic_write_json, atomic_write_text
 
@@ -25,6 +26,7 @@ def default_executable() -> str:
 # Launching and agent discovery are entirely specific to Antigravity.
 class AgyAdapter(ClaudeAdapter):
     client_id = "agy"
+    client_name = "agy"
     accept_limitations = False
     tools = (
         "view_file", "list_dir", "find_by_name", "grep_search",
@@ -63,12 +65,8 @@ class AgyAdapter(ClaudeAdapter):
     def confirm_launch(self, mode: str, *, continuation: bool) -> None:
         message = (
             f"\nStart agy with saved memory: {self.task_label(mode)}\n"
-            "  You can edit files, run commands and search the web.\n"
             "  This mode does not include your connected services or other AI helpers.\n"
-            "  Memory support is experimental; reliability in long conversations is unverified.\n"
         )
-        if mode != "auto" and relevant_task_issues(self.workspace, mode)[1]:
-            message += "  Some memories need organizing first; this may use Codex before agy starts.\n"
         if continuation:
             message += (
                 "  Resuming a conversation may keep its old memories despite your selection.\n"
@@ -82,8 +80,9 @@ class AgyAdapter(ClaudeAdapter):
             "  Custom-agent tools, MCP integrations and subagent orchestration are not inherited.\n"
             "  Native rule-file loading limits are separate from this injected prompt;\n"
             "  the adapter does not truncate Memory to fit those limits.\n"
-            "  Memory retention after context compaction has not been verified.\n"
-            "  Pending/stale memory annotations use the existing Codex classifier before launch.\n"
+            "  Memory instructions stay in the system prompt when conversation history is compacted.\n"
+            "  Lazy record bodies can be read again with the Memory loader after compaction.\n"
+            "  agy prepares any pending/stale memory annotations before starting your task.\n"
         )
         if continuation:
             details += "  On resume, agy may reuse the original agent prompt rather than this launch's prompt.\n"
@@ -160,22 +159,25 @@ class AgyAdapter(ClaudeAdapter):
             raise
         return output
 
-    def _install_agent(self, prompt_path: Path) -> str:
+    def _install_agent(self, prompt_path: Path, *, classifier: bool = False) -> str:
         launch_id = self._leases[prompt_path.resolve()]
         name = "memory-" + launch_id
         directory = self.agent_root / name
         path = directory / "agent.md"
         header = {
             "name": name, "description": "Task-bound Memory Framework session.",
-            "mainAgent": True, "subagent": False, "tools": list(self.tools),
+            "mainAgent": True, "subagent": False,
+            "tools": [] if classifier else list(self.tools), "inheritMcp": False,
             "commandExecutionPolicy": "off",
         }
         # JSON mappings are valid YAML frontmatter; no escaping or implicit YAML values.
-        body = self._workspace_instructions() + "\n\n" + prompt_path.read_text(encoding="utf-8")
-        body += (
-            "\n\nBefore working in a subdirectory, read its applicable AGENTS.md/GEMINI.md. "
-            "Use the configured Memory loader for lazy records; do not infer their bodies.\n"
-        )
+        body = prompt_path.read_text(encoding="utf-8")
+        if not classifier:
+            body = self._workspace_instructions() + "\n\n" + body
+            body += (
+                "\n\nBefore working in a subdirectory, read its applicable AGENTS.md/GEMINI.md. "
+                "Use the configured Memory loader for lazy records; do not infer their bodies.\n"
+            )
         text = "---\n" + json.dumps(header, ensure_ascii=False) + "\n---\n\n" + body
         registry = self.registrations_dir / f"{launch_id}.json"
         value = json.loads(registry.read_text(encoding="utf-8"))
@@ -186,6 +188,36 @@ class AgyAdapter(ClaudeAdapter):
         directory.mkdir(mode=0o700)
         atomic_write_text(path, text, mode=0o600)
         return name
+
+    def _classify_annotations(self, corpus, output_schema):
+        prompt = self._new_launch_path()
+        self._register_prompt(prompt)
+        try:
+            atomic_write_text(
+                prompt,
+                ANNOTATION_CLASSIFIER_INSTRUCTIONS
+                + "\n# Required output schema\n```json\n"
+                + json.dumps(output_schema) + "\n```\n\n" + corpus,
+                mode=0o600,
+            )
+            name = self._install_agent(prompt, classifier=True)
+            with tempfile.TemporaryDirectory(prefix="memory-agy-annotations-") as directory:
+                command = [
+                    self.executable, "--agent", name, "--output-format", "json",
+                    "--disable-slash-commands", "--print",
+                    "Classify the supplied annotation corpus against the required output schema. "
+                    "Return exactly one JSON object, with no other text.",
+                ]
+                try:
+                    completed = subprocess.run(
+                        command, text=True, capture_output=True, cwd=directory,
+                        env=self._annotation_environment(), check=False,
+                    )
+                except OSError as exc:
+                    raise MemoryFrameworkError(f"cannot launch annotation agy: {exc}") from exc
+                return self._annotation_result(completed)
+        finally:
+            self.release_prompt(prompt)
 
     def _remove_registration(self, registry, value, *, force):
         path = None

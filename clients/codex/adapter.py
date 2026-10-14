@@ -7,7 +7,6 @@ import os
 import shutil
 import stat
 import subprocess
-import sys
 import tomllib
 import uuid
 from contextlib import contextmanager
@@ -16,13 +15,11 @@ from pathlib import Path
 from typing import Iterator
 
 from base import load_handoff as load_handoff
-from memory_framework.errors import MemoryFrameworkError, PublicationError, ValidationError
+from memory_framework.errors import MemoryFrameworkError, ValidationError
 from memory_framework.parsing import load_task_types
 from memory_framework.preflight import (
-    apply_annotation_preflight,
-    prepare_annotation_preflight,
-    record_classifier_result,
-    relevant_task_issues,
+    ANNOTATION_CLASSIFIER_INSTRUCTIONS,
+    ensure_task_annotations,
 )
 from memory_framework.rendering import render_auto_view, render_task_view
 from memory_framework.tasking import BUILT_IN_TASKS, resolve_task
@@ -358,14 +355,7 @@ class CodexAdapter:
             / launch_id
             / "developer-instructions.md"
         )
-        instructions = """# Annotation preflight classifier
-
-Perform only the semantic classification supplied in the user prompt. Use the prompt as the sole
-source of evidence. Do not inspect files, generated artifacts, old labels, records outside the
-prompt, or live annotation matrices. Do not call tools or shell commands and do not edit files.
-Return only the JSON required by the supplied output schema. The parent launcher owns proposal
-construction, validation, and atomic application.
-"""
+        instructions = ANNOTATION_CLASSIFIER_INSTRUCTIONS
         self.workspace.ensure_private_runtime_directory(output.parent)
         atomic_write_text(output, instructions, mode=0o600)
         return self._register_profile(
@@ -437,56 +427,16 @@ construction, validation, and atomic application.
         return status, value
 
     def ensure_task_annotations(self, task_id: str, *, max_attempts: int = 3) -> None:
-        for attempt in range(1, max_attempts + 1):
+        def classify(corpus, output_schema):
+            profile_name, _ = self._build_annotation_profile()
             try:
-                preflight = prepare_annotation_preflight(self.workspace, task_id)
-            except ValidationError:
-                if attempt == max_attempts:
-                    raise
-                continue
-            if not preflight.issues:
-                return
-            print(
-                f"Memory annotation preflight for {task_id}: "
-                f"{len(preflight.issues)} pending/stale cells (attempt {attempt}/{max_attempts}).",
-                file=sys.stderr,
-                flush=True,
-            )
-            if preflight.requires_classification:
-                profile_name, _ = self._build_annotation_profile()
-                try:
-                    status, result = self._run_annotation_classifier(
-                        profile_name,
-                        preflight.corpus,
-                        preflight.output_schema,
-                    )
-                finally:
-                    self.release_profile(profile_name)
-                if status != 0:
-                    raise MemoryFrameworkError(
-                        f"annotation Codex exited with status {status}; task session was not started"
-                    )
-                if result is None:
-                    raise MemoryFrameworkError(
-                        "annotation Codex produced no structured result; task session was not started"
-                    )
-                try:
-                    record_classifier_result(preflight, result)
-                except (ValidationError, TypeError, KeyError) as exc:
-                    raise MemoryFrameworkError(
-                        f"annotation Codex result failed validation: {exc}"
-                    ) from exc
-            try:
-                apply_annotation_preflight(self.workspace, preflight)
-            except PublicationError:
-                if attempt == max_attempts:
-                    raise
-                continue
-            _, remaining = relevant_task_issues(self.workspace, task_id)
-            if not remaining:
-                return
-        raise MemoryFrameworkError(
-            f"annotation preflight did not converge for {task_id}; task session was not started"
+                return self._run_annotation_classifier(profile_name, corpus, output_schema)
+            finally:
+                self.release_profile(profile_name)
+
+        ensure_task_annotations(
+            self.workspace, task_id, classify=classify,
+            client_name="Codex", max_attempts=max_attempts,
         )
 
     @contextmanager

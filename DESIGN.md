@@ -742,9 +742,12 @@ and normal operation creates no repository entry document. Owner UID, wrapper PI
 start time are recorded privately; later launches remove only stale identity-matching artifacts.
 
 Before a task-bound Claude launch renders that artifact, it uses the same selected-task annotation
-preflight, implemented by the minimal ephemeral Codex classifier and parent-owned atomic apply.
-This keeps annotation semantics and the no-pending-render invariant client-independent while
-retaining one classifier implementation.
+preflight, with a tool-free Claude print call over the supplied corpus. `--safe-mode`, an empty
+builtin tool list and strict empty MCP configuration isolate the classifier from project
+customizations and external tools while preserving the client's normal authentication;
+`--bare` is deliberately avoided because it disables OAuth/keychain authentication.
+No session is persisted. The native structured output is
+validated and atomically applied by the shared framework, matching Codex's publication rules.
 
 Resume and continue invocations receive the selected prompt again. Because their retained
 conversation can still contain prior task context, the wrapper warns that selection must match
@@ -761,8 +764,7 @@ falling back to separate controlling-terminal read/write streams when stdin is r
 The default is normal cancellation; redirected stdin cannot supply consent. Headless callers
 use `--accept-limitations` for this invocation. An Auto handoff confirms its target separately.
 `?` displays technical details and returns to the confirmation; viewing details never grants
-consent. Annotation-update notices appear only when that task has relevant coverage issues;
-the read-only check before consent does not classify or modify memories.
+consent. Annotation progress appears only when work is needed, after consent.
 
 The adapter materializes the complete rendered view and applicable standalone global/ancestor
 instruction files into a unique custom main agent. It preserves basic coding/web tools and
@@ -770,13 +772,44 @@ native tool approval, not the default agent's arbitrary MCP or orchestration cap
 The native rules subsystem retains its own size and discovery limits. Those file-loader
 limits are not established limits on the custom agent's injected system prompt, and the
 startup summary does not present them as Memory truncation risks. No Memory record is
-relabelled or truncated to meet those limits. Long-context/post-compaction retention is not
-claimed. Practical limitations are disclosed before launch.
+relabelled or truncated to meet those limits. Practical limitations are disclosed before launch.
 
 A native 1.3.5 probe loaded a 205,095-byte custom-agent system prompt with 30,000 padding
 words. A tool-free response recovered random markers at the beginning, middle and end;
 reported input usage was 33,508 tokens. This demonstrates loading beyond both native-rule
 budgets, without establishing an unlimited prompt capacity or compaction retention.
+
+#### System instructions across history compaction
+
+The adapter's contract is to keep the complete rendered eager view, lazy record index and
+loader instructions in the custom-agent system prompt. Loaded lazy record bodies remain
+conversation/tool history and may be summarized; they can be loaded again from authoritative
+records. The contract concerns supplying instructions, not guaranteeing model compliance.
+
+Official SDK documentation describes compaction as replacing older conversation turns with
+a cumulative summary while retaining recent turns. The public CLI repository does not contain
+the engine implementation, so the current installed Linux x86-64 1.3.5 binary was also analyzed
+using its Go function table, ELF relocations and disassembly. SHA-256:
+`b5385638174a5e720e904f3a2678752534fb8414d10c2c302fa16daf56cbcfc9`.
+
+- `PlannerGenerator.generateWithAPIRetry` calls `requestBuilder.buildRequest` at `0x7b55168`.
+- `requestBuilder.buildRequest` calls the mixin interface's `GetSystemPrompt` slot (`0x28`)
+  at `0x7b57cfa`, processes its sections, and independently calls `TrajectoryToChatMessages`
+  (slot `0x60`) at `0x7b57f69`. The system sections are not the conversation trajectory.
+- The custom-agent mixin's ELF interface table starts at `0xab8d9e8`. Its system-prompt slot
+  resolves to `CustomAgentMixin.GetSystemPrompt` (`0x7d77120`); its trajectory slot resolves
+  to `CustomAgentMixin.TrajectoryToChatMessages` (`0x7d778c0`). The latter delegates to the
+  trajectory converter; the former builds configured prompt sections independently.
+- `CheckpointHandler.buildCheckpointRequest` (`0x7b91b00`) uses the trajectory converter at
+  `0x7b91d60` for checkpoint history. `CheckpointHandler.Handle` writes checkpoint summaries
+  and auxiliary history data; it does not replace the custom agent's system configuration.
+
+These separate request-construction paths establish system-instruction retention through
+history compaction on this version. This is binary analysis, not a claim that a long-context
+end-to-end compaction run was performed. Native engine changes require this boundary to be
+rechecked. Official references:
+[compaction guide](https://github.com/google-antigravity/antigravity-sdk-python/blob/main/skills/google-antigravity-sdk/examples/getting_started/compaction.md),
+[custom-agent system prompt](https://antigravity.google/blog/introducing-custom-agents).
 
 The registered agent file is mode 0600 in an owner-only directory under the native global
 agent discovery root. PID/start-time leases and a content hash allow cleanup without removing
@@ -786,8 +819,13 @@ exits; native conversation storage can retain its copied system prompt.
 In native 1.3.5 tests, restoring the same conversation retains its original agent prompt despite
 a changed definition passed at startup. Resume therefore requires the explicit limitation
 confirmation and advises keeping the original task. It does not promise to replace prior
-Memory. Auto continuation cannot hand off. Annotation preflight uses the existing Codex
-classifier and parent-owned atomic publication, matching the Claude integration.
+Memory. Auto continuation cannot hand off. Annotation preflight uses agy itself through a
+separate custom agent with no tools or inherited MCP, launched from an isolated directory.
+Its system prompt contains only classifier instructions, the supplied corpus and the required
+JSON schema, with no workspace instruction discovery. The native `--json-schema` response
+path returned repeated empty objects in a 1.3.5 probe; the classifier instead requests one JSON
+object and relies on the shared parent-side target/label/hash validation and atomic publication.
+No invalid or failed classification starts the task session, and there is no Codex fallback.
 
 Snapshots use `AGENTS.md` and remain subject to the native rules subsystem's limits. Snapshots
 are data export only: they do not execute an agent and need no model-start confirmation.

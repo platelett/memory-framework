@@ -36,6 +36,22 @@ if os.environ.get("MEMORY_FRAMEWORK_HANDOFF"):
 with open(os.environ["FAKE_CLAUDE_LOG"], "a", encoding="utf-8") as handle:
     handle.write(json.dumps(entry) + "\\n")
 
+if "--json-schema" in sys.argv:
+    assert "--safe-mode" in sys.argv and "--bare" not in sys.argv
+    assert sys.argv[sys.argv.index("--tools") + 1] == ""
+    assert "--strict-mcp-config" in sys.argv
+    assert "# Automated task annotation preflight" in sys.stdin.read()
+    schema = json.loads(sys.argv[sys.argv.index("--json-schema") + 1])
+    def synthesize(value):
+        if "enum" in value:
+            return "not-always" if "not-always" in value["enum"] else "lazy"
+        return {key: synthesize(item) for key, item in value.get("properties", {}).items()}
+    output = synthesize(schema)
+    if os.environ.get("FAKE_ANNOTATION_INVALID"):
+        output = {}
+    print(json.dumps({"structured_output":output, "is_error":False}))
+    raise SystemExit(int(os.environ.get("FAKE_ANNOTATION_EXIT", "0")))
+
 text = entry.get("prompt", "")
 path_match = re.search(r"HANDOFF_PATH=([^\\s]+)", text)
 nonce_match = re.search(r"HANDOFF_NONCE=([0-9a-f]+)", text)
@@ -53,28 +69,6 @@ if path_match and nonce_match and os.environ.get("FAKE_HANDOFF_TASK"):
     )
     executable.chmod(executable.stat().st_mode | stat.S_IXUSR)
     return executable, log
-
-
-def _fake_codex_classifier(tmp_path: Path) -> Path:
-    executable = tmp_path / "fake-codex-classifier"
-    executable.write_text(
-        """#!/usr/bin/env python3
-import json, sys
-from pathlib import Path
-prompt = sys.stdin.read()
-if "# Automated task annotation preflight" not in prompt:
-    raise SystemExit(3)
-schema = json.loads(Path(sys.argv[sys.argv.index("--output-schema") + 1]).read_text())
-def synthesize(value):
-    if "enum" in value:
-        return "not-always" if "not-always" in value["enum"] else "lazy"
-    return {key: synthesize(item) for key, item in value.get("properties", {}).items()}
-Path(sys.argv[sys.argv.index("-o") + 1]).write_text(json.dumps(synthesize(schema)))
-""",
-        encoding="utf-8",
-    )
-    executable.chmod(executable.stat().st_mode | stat.S_IXUSR)
-    return executable
 
 
 def _environment(workspace, executable: Path, log: Path) -> dict[str, str]:
@@ -154,7 +148,7 @@ def test_claude_task_uses_unique_prompt_file_and_preserves_user_layers(
     )
 
 
-def test_claude_standard_task_uses_codex_annotation_preflight_before_render(
+def test_claude_standard_task_uses_own_annotation_preflight_before_render(
     workspace, tmp_path
 ):
     write_record(workspace, "reference", "docs", "api", "API BODY")
@@ -163,7 +157,7 @@ def test_claude_standard_task_uses_codex_annotation_preflight_before_render(
     environment = _environment(workspace, executable, log)
     environment.update(
         {
-            "MEMORY_CODEX_BIN": str(_fake_codex_classifier(tmp_path)),
+            "MEMORY_CODEX_BIN": "/must-not-run-codex",
             "CODEX_HOME": str(tmp_path / "codex-home"),
         }
     )
@@ -177,11 +171,29 @@ def test_claude_standard_task_uses_codex_annotation_preflight_before_render(
     )
 
     assert result.returncode == 0, result.stderr
-    prompt = _calls(log)[0]["prompt"]
+    assert len(_calls(log)) == 2
+    assert "Preparing memories for build with Claude" in result.stderr
+    prompt = _calls(log)[1]["prompt"]
     assert "Recall-first pending annotation" not in prompt
     assert "- Read when work concerns api behavior." in prompt
     matrix = read_json(workspace.matrix_path("shared"))
     assert matrix["tasks"]["build"]["records"]["reference.docs.api"]["label"] == "lazy"
+
+
+@pytest.mark.parametrize("setting,value", [("FAKE_ANNOTATION_INVALID", "1"), ("FAKE_ANNOTATION_EXIT", "7")])
+def test_own_annotation_failure_preserves_matrix_and_never_starts_task(workspace, tmp_path, setting, value):
+    write_record(workspace, "reference", "docs", "api", "API BODY")
+    write_task(workspace)
+    original = workspace.matrix_path("shared").read_bytes()
+    executable, log = _fake_claude(tmp_path)
+    environment = _environment(workspace, executable, log)
+    environment.update({setting:value, "MEMORY_CODEX_BIN":"/must-not-run-codex"})
+    result = subprocess.run([str(WRAPPER), "--task", "build", "inspect"], env=environment,
+                            text=True, capture_output=True, check=False)
+    assert result.returncode == 2
+    assert "annotation Claude" in result.stderr
+    assert len(_calls(log)) == 1
+    assert workspace.matrix_path("shared").read_bytes() == original
 
 
 @pytest.mark.parametrize(

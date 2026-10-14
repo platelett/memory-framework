@@ -17,7 +17,6 @@ from base import load_handoff  # noqa: E402
 from agy.adapter import AgyAdapter, default_executable  # noqa: E402
 from agy.snapshot import export_snapshot  # noqa: E402
 from agy.terminal import LaunchCancelled, terminal_streams  # noqa: E402
-from codex.adapter import CodexAdapter  # noqa: E402
 from memory_framework.errors import MemoryFrameworkError, ValidationError  # noqa: E402
 from memory_framework.workspace import Workspace, discover_workspace  # noqa: E402
 
@@ -245,11 +244,7 @@ def _run_selected_task(
             "use --raw only for an explicit memory bypass"
         )
     adapter.confirm_launch(task_id, continuation=_is_continuation(arguments))
-    CodexAdapter(
-        adapter.workspace,
-        launch_cwd=adapter.launch_cwd,
-        effective_cwd=adapter.effective_cwd,
-    ).ensure_task_annotations(task_id)
+    adapter.ensure_task_annotations(task_id)
     prompt_path = adapter.build_task_prompt(task_id)
     if task_id in adapter.available_routing_tasks():
         adapter.remember_selection(task_id, directory_hint=str(adapter.effective_cwd))
@@ -319,11 +314,7 @@ def _run_auto(adapter: AgyAdapter, arguments: list[str]) -> None:
         normalized_intent=str(data.get("normalized_intent") or "") or None,
         remember_similar=bool(data.get("remember", False)),
     )
-    CodexAdapter(
-        adapter.workspace,
-        launch_cwd=adapter.launch_cwd,
-        effective_cwd=adapter.effective_cwd,
-    ).ensure_task_annotations(task_id)
+    adapter.ensure_task_annotations(task_id)
     final_prompt = adapter.build_task_prompt(
         task_id,
         session_note=str(data.get("memory_preference") or ""),

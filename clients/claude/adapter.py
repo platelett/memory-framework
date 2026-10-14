@@ -6,6 +6,7 @@ import os
 import shutil
 import stat
 import subprocess
+import tempfile
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -14,6 +15,7 @@ from typing import Iterator
 
 from memory_framework.errors import MemoryFrameworkError, ValidationError
 from memory_framework.parsing import load_task_types
+from memory_framework.preflight import ANNOTATION_CLASSIFIER_INSTRUCTIONS, ensure_task_annotations
 from memory_framework.rendering import render_auto_view, render_task_view
 from memory_framework.tasking import BUILT_IN_TASKS, resolve_task
 from memory_framework.workspace import Workspace, atomic_write_json, atomic_write_text
@@ -37,6 +39,7 @@ class ClaudeAdapter:
     """Render and inject task-bound Memory views into Claude Code."""
 
     client_id = "claude"
+    client_name = "Claude"
 
     def __init__(
         self,
@@ -81,6 +84,70 @@ class ClaudeAdapter:
 
     def available_routing_tasks(self) -> dict[str, object]:
         return dict(load_task_types(self.workspace.tasks_dir))
+
+    def ensure_task_annotations(self, task_id: str, *, max_attempts: int = 3) -> None:
+        ensure_task_annotations(
+            self.workspace, task_id, classify=self._classify_annotations,
+            client_name=self.client_name, max_attempts=max_attempts,
+        )
+
+    def _annotation_environment(self) -> dict[str, str]:
+        environment = os.environ.copy()
+        environment[f"MEMORY_{self.client_id.upper()}_ACTIVE"] = "1"
+        environment.pop("MEMORY_FRAMEWORK_HANDOFF", None)
+        return environment
+
+    def _classify_annotations(self, corpus, output_schema):
+        # No project discovery, tools, MCP or persistent session in this isolated call.
+        with tempfile.TemporaryDirectory(prefix="memory-claude-annotations-") as directory:
+            prompt = Path(directory) / "instructions.md"
+            atomic_write_text(prompt, ANNOTATION_CLASSIFIER_INSTRUCTIONS, mode=0o600)
+            command = [
+                self.executable, "--safe-mode", "--print", "--output-format", "json",
+                "--json-schema", json.dumps(output_schema),
+                "--system-prompt-file", str(prompt), "--tools", "",
+                "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+                "--no-session-persistence", "--disable-slash-commands",
+            ]
+            try:
+                completed = subprocess.run(
+                    command, input=corpus, text=True, capture_output=True,
+                    cwd=directory, env=self._annotation_environment(), check=False,
+                )
+            except OSError as exc:
+                raise MemoryFrameworkError(f"cannot launch annotation Claude: {exc}") from exc
+            return self._annotation_result(completed)
+
+    def _annotation_result(self, completed):
+        if completed.returncode != 0:
+            try:
+                failure = json.loads(completed.stdout)
+            except (ValueError, TypeError):
+                failure = None
+            if isinstance(failure, dict) and str(failure.get("result", "")).startswith("Failed to authenticate:"):
+                raise MemoryFrameworkError(
+                    f"annotation {self.client_name} could not authenticate with its current login; "
+                    "sign in to that CLI and retry. The task session was not started."
+                )
+            return completed.returncode, None
+        try:
+            envelope = json.loads(completed.stdout)
+            if not isinstance(envelope, dict) or envelope.get("is_error"):
+                raise ValueError("unsuccessful response")
+            if str(envelope.get("status", "success")).lower() not in ("success", "completed"):
+                raise ValueError("unsuccessful response status")
+            value = envelope.get("structured_output")
+            if value is None:
+                value = envelope.get("response", envelope.get("result"))
+            if isinstance(value, str):
+                value = json.loads(value)
+            if not isinstance(value, dict):
+                raise ValueError("missing JSON object")
+            return 0, value
+        except (ValueError, TypeError) as exc:
+            raise MemoryFrameworkError(
+                f"annotation {self.client_name} returned invalid structured output: {exc}"
+            ) from exc
 
     def validate_launch_arguments(self, arguments: list[str]) -> None:
         """Validate wrapper-owned launch constraints.

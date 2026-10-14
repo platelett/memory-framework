@@ -17,7 +17,6 @@ from agy.cli import _is_continuation, _is_utility
 from agy.terminal import LaunchCancelled
 from conftest import REPOSITORY, write_record, write_task
 from memory_framework.errors import ValidationError
-from test_claude_client import _fake_codex_classifier
 
 
 WRAPPER = REPOSITORY / "bin/memory-agy"
@@ -39,6 +38,20 @@ if "--agent" in sys.argv:
         entry.update(agent=str(path), body=path.read_text(), mode=path.stat().st_mode & 0o777)
 with open(os.environ["FAKE_AGY_LOG"], "a") as f:
     f.write(json.dumps(entry) + "\\n")
+if "# Annotation preflight classifier" in entry.get("body", ""):
+    assert "# Automated task annotation preflight" in entry["body"]
+    assert '"tools": []' in entry["body"]
+    assert "WORKSPACE_SENTINEL" not in entry["body"]
+    schema = json.loads(re.search(r"# Required output schema\\n```json\\n(.*?)\\n```", entry["body"], re.S)[1])
+    def synthesize(value):
+        if "enum" in value:
+            return "not-always" if "not-always" in value["enum"] else "lazy"
+        return {key: synthesize(item) for key, item in value.get("properties", {}).items()}
+    output = synthesize(schema)
+    if os.environ.get("FAKE_ANNOTATION_INVALID"):
+        output = {}
+    print(json.dumps({"status":"SUCCESS","response":json.dumps(output)}))
+    raise SystemExit(int(os.environ.get("FAKE_ANNOTATION_EXIT", "0")))
 body = entry.get("body", "")
 path = re.search(r"HANDOFF_PATH=([^\\s]+)", body)
 nonce = re.search(r"HANDOFF_NONCE=([0-9a-f]+)", body)
@@ -56,7 +69,7 @@ def env_for(workspace, tmp_path):
     env = dict(os.environ, MEMORY_WORKSPACE=str(workspace.root),
                MEMORY_AGY_BIN=str(executable), FAKE_AGY_LOG=str(log),
                MEMORY_AGY_AGENT_ROOT=str(tmp_path / "agents"),
-               MEMORY_CODEX_BIN=str(_fake_codex_classifier(tmp_path)),
+               MEMORY_CODEX_BIN="/must-not-run-codex",
                CODEX_HOME=str(tmp_path / "codex-home"))
     return env, log
 
@@ -195,7 +208,8 @@ def test_details_do_not_accept_launch_or_claim_rule_caps(workspace, monkeypatch,
         with pytest.raises(LaunchCancelled):
             adapter.confirm_launch("all-lazy", continuation=False)
     summary, details = output.getvalue().split("How this mode works:")
-    assert "Custom-agent tools" not in summary and "Codex" not in summary
+    assert "Custom-agent tools" not in summary and "Codex" not in output.getvalue()
+    assert "unverified" not in output.getvalue()
     assert "Resuming" not in summary
     assert "Native rule-file loading limits are separate" in details
     assert "does not truncate Memory" in details
@@ -229,26 +243,48 @@ def test_confirmed_launch_composes_rules_and_cleans_private_artifacts(workspace,
 
 
 def test_standard_task_preflights_before_render_after_consent(workspace, tmp_path):
+    (workspace.root / "AGENTS.md").write_text("WORKSPACE_SENTINEL")
     write_record(workspace, "reference", "docs", "api", "API_BODY")
     write_task(workspace)
     env, log = env_for(workspace, tmp_path)
     result = invoke(workspace, env, "--accept-limitations", "--task", "build", "-p", "inspect")
     assert result.returncode == 0, result.stderr
-    assert "Read when work concerns api behavior." in calls(log)[0]["body"]
-    assert "Some memories need organizing first; this may use Codex" in result.stderr
+    entries = calls(log)
+    assert len(entries) == 2
+    assert "# Annotation preflight classifier" in entries[0]["body"]
+    assert "Read when work concerns api behavior." in entries[1]["body"]
+    assert "Preparing memories for build with agy" in result.stderr
+    assert "Codex" not in result.stderr
+
+
+@pytest.mark.parametrize("setting,value", [("FAKE_ANNOTATION_INVALID", "1"), ("FAKE_ANNOTATION_EXIT", "7")])
+def test_own_annotation_failure_preserves_matrix_and_never_starts_task(workspace, tmp_path, setting, value):
+    write_record(workspace, "reference", "docs", "api", "API_BODY")
+    write_task(workspace)
+    original = workspace.matrix_path("shared").read_bytes()
+    env, log = env_for(workspace, tmp_path)
+    env[setting] = value
+    result = invoke(workspace, env, "--task", "build", "--accept-limitations", "-p", "inspect")
+    assert result.returncode == 2
+    assert "annotation agy" in result.stderr
+    assert len(calls(log)) == 1
+    assert workspace.matrix_path("shared").read_bytes() == original
+    assert not list(workspace.state_dir.glob("clients/agy/registrations/*.json"))
 
 
 def test_auto_handoff_confirms_both_phases_and_preserves_request(workspace, tmp_path):
+    write_record(workspace, "reference", "docs", "api", "API_BODY")
     write_task(workspace)
     env, log = env_for(workspace, tmp_path)
     env.update(FAKE_HANDOFF_TASK="build", FAKE_REQUEST="inspect this")
     result = invoke(workspace, env, "--auto", "--accept-limitations", "-p", "inspect this")
     assert result.returncode == 0, result.stderr
     entries = calls(log)
-    assert len(entries) == 2
-    assert entries[1]["argv"][2:] == ["-p", "inspect this"]
+    assert len(entries) == 3
+    assert "# Annotation preflight classifier" in entries[1]["body"]
+    assert entries[2]["argv"][2:] == ["-p", "inspect this"]
     assert result.stderr.count("Accepted for this invocation") == 2
-    assert "# Active task type" in entries[1]["body"]
+    assert "# Active task type" in entries[2]["body"]
 
 
 def test_resume_warns_and_keeps_native_arguments(workspace, tmp_path):

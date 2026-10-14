@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from .annotations import coverage_issues, load_annotation_snapshot
-from .errors import ValidationError
+from .errors import MemoryFrameworkError, PublicationError, ValidationError
 from .models import CoverageIssue, TaskType
 from .migrations import bind_approved_task_versions
 from .relabel import CLASSIFICATION_GUIDANCE, apply_relabel, prepare_relabel
@@ -14,6 +16,67 @@ from .workspace import Workspace, atomic_write_json
 
 
 GLOBAL_ISSUE_KINDS = {"pending-always", "stale-always", "orphan-always"}
+
+ANNOTATION_CLASSIFIER_INSTRUCTIONS = """# Annotation preflight classifier
+
+Perform only the semantic classification in the supplied corpus. Use that corpus as the sole
+source of evidence. Do not inspect files, generated artifacts, old labels, records outside the
+prompt, or live annotation matrices. Do not call tools or shell commands and do not edit files.
+Return only the JSON required by the supplied output schema. The parent launcher owns proposal
+construction, validation, and atomic application.
+"""
+
+
+def ensure_task_annotations(
+    workspace: Workspace,
+    task_id: str,
+    *,
+    classify: Callable[[str, dict[str, object]], tuple[int, dict[str, object] | None]],
+    client_name: str,
+    max_attempts: int = 3,
+) -> None:
+    """Own publication in the framework; leave semantic classification to the launching client."""
+    for attempt in range(1, max_attempts + 1):
+        try:
+            preflight = prepare_annotation_preflight(workspace, task_id)
+        except ValidationError:
+            if attempt == max_attempts:
+                raise
+            continue
+        if not preflight.issues:
+            return
+        print(
+            f"Preparing memories for {task_id} with {client_name} "
+            f"(attempt {attempt}/{max_attempts})...",
+            file=sys.stderr, flush=True,
+        )
+        if preflight.requires_classification:
+            status, result = classify(preflight.corpus, preflight.output_schema)
+            if status != 0:
+                raise MemoryFrameworkError(
+                    f"annotation {client_name} exited with status {status}; task session was not started"
+                )
+            if result is None:
+                raise MemoryFrameworkError(
+                    f"annotation {client_name} produced no structured result; task session was not started"
+                )
+            try:
+                record_classifier_result(preflight, result)
+            except (ValidationError, TypeError, KeyError) as exc:
+                raise MemoryFrameworkError(
+                    f"annotation {client_name} result failed validation: {exc}"
+                ) from exc
+        try:
+            apply_annotation_preflight(workspace, preflight)
+        except PublicationError:
+            if attempt == max_attempts:
+                raise
+            continue
+        if not relevant_task_issues(workspace, task_id)[1]:
+            return
+    raise MemoryFrameworkError(
+        f"annotation preflight did not converge for {task_id}; task session was not started"
+    )
 
 
 @dataclass(frozen=True, slots=True)
