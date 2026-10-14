@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 from claude.adapter import ClaudeAdapter
+from agy.terminal import LaunchCancelled, terminal_streams
 from memory_framework.errors import MemoryFrameworkError, ValidationError
 from memory_framework.rendering import render_auto_view
 from memory_framework.workspace import atomic_write_json, atomic_write_text
@@ -69,18 +70,30 @@ class AgyAdapter(ClaudeAdapter):
             print(message + "Accepted for this invocation via --accept-limitations.", file=sys.stderr)
             return
         try:
-            terminal = open("/dev/tty", "r+", encoding="utf-8", buffering=1)
+            with terminal_streams() as (input_stream, output_stream):
+                output_stream.write(message + "Continue with these limitations? [y/N]: ")
+                output_stream.flush()
+                while True:
+                    answer = input_stream.readline()
+                    if not answer:
+                        raise LaunchCancelled("No confirmation received. Launch cancelled.")
+                    answer = answer.strip().lower()
+                    if answer in {"y", "yes"}:
+                        return
+                    if answer in {"", "n", "no"}:
+                        raise LaunchCancelled("Launch cancelled.")
+                    output_stream.write("Please enter y or n (Enter cancels): ")
+                    output_stream.flush()
         except OSError as exc:
             print(message, file=sys.stderr)
+            command = "agy --auto" if mode == "auto" else f"agy --task {mode}"
             raise ValidationError(
-                "startup confirmation needs a terminal; pass --accept-limitations explicitly"
+                "Could not read the startup confirmation from a terminal.\n"
+                "Run agy in an interactive terminal to answer the question.\n"
+                "For a script, explicitly accept the listed limitations with:\n"
+                f"  {command} --accept-limitations\n"
+                "The model has not been started for this launch."
             ) from exc
-        with terminal:
-            terminal.write(message + "Continue with these limitations? [y/N]: ")
-            terminal.flush()
-            answer = terminal.readline().strip().lower()
-        if answer not in {"y", "yes"}:
-            raise ValidationError("Antigravity launch cancelled; no model was started")
 
     def _workspace_instructions(self) -> str:
         parts = []

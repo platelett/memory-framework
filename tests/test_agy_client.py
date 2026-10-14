@@ -3,13 +3,18 @@ from __future__ import annotations
 import io
 import json
 import os
+import pty
+import select
 import subprocess
+import time
+from contextlib import nullcontext
 from pathlib import Path
 
 import pytest
 
 from agy.adapter import AgyAdapter
 from agy.cli import _is_continuation, _is_utility
+from agy.terminal import LaunchCancelled
 from conftest import REPOSITORY, write_record, write_task
 from memory_framework.errors import ValidationError
 from test_claude_client import _fake_codex_classifier
@@ -25,6 +30,8 @@ def fake_agy(tmp_path):
 import json, os, re, sys
 from pathlib import Path
 entry = {"argv": sys.argv[1:], "cwd": os.getcwd()}
+if os.environ.get("FAKE_AGY_READ_STDIN"):
+    entry["stdin"] = sys.stdin.read()
 if "--agent" in sys.argv:
     name = sys.argv[sys.argv.index("--agent") + 1]
     path = Path(os.environ["MEMORY_AGY_AGENT_ROOT"]) / name / "agent.md"
@@ -84,21 +91,105 @@ def test_noninteractive_confirmation_fails_before_classifier_and_launch(workspac
     assert not workspace.generated_dir.exists()
 
 
-@pytest.mark.parametrize("answer,accepted", [("\n", False), ("n\n", False), ("yes\n", True)])
+@pytest.mark.parametrize("answer,accepted", [("\n", False), ("n\n", False), ("", False), ("yes\n", True)])
 def test_interactive_confirmation_is_default_no_and_uses_tty(workspace, monkeypatch, answer, accepted):
-    class Terminal(io.StringIO):
-        def readline(self, *args): return answer
-        def close(self): pass
-    terminal = Terminal()
-    monkeypatch.setattr("builtins.open", lambda *args, **kwargs: terminal)
+    terminal = io.StringIO()
+    monkeypatch.setattr("agy.adapter.terminal_streams", lambda: nullcontext((io.StringIO(answer), terminal)))
     adapter = AgyAdapter(workspace)
     if accepted:
         adapter.confirm_launch("all-lazy", continuation=True)
     else:
-        with pytest.raises(ValidationError, match="cancelled"):
+        with pytest.raises(LaunchCancelled, match="cancelled"):
             adapter.confirm_launch("all-lazy", continuation=True)
     assert "RESUME" in terminal.getvalue()
     assert "[y/N]" in terminal.getvalue()
+
+
+def pty_invoke(workspace, env, args, answers, *, redirected_input=None):
+    """Exercise real tty streams, including tty stdin without a controlling tty."""
+    master, slave = pty.openpty()
+    kwargs = {"start_new_session": True}
+    if redirected_input is not None:
+        def controlling_terminal():
+            import fcntl
+            import termios
+            os.setsid()
+            fcntl.ioctl(1, termios.TIOCSCTTY, 0)
+        kwargs = {"preexec_fn": controlling_terminal}
+    process = subprocess.Popen(
+        [str(WRAPPER), *args], cwd=workspace.root, env=env,
+        stdin=slave if redirected_input is None else subprocess.PIPE,
+        stdout=slave, stderr=slave, **kwargs,
+    )
+    os.close(slave)
+    transcript = bytearray()
+    try:
+        if redirected_input is not None:
+            process.stdin.write(redirected_input)
+            process.stdin.close()
+        os.write(master, answers)
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            ready, _, _ = select.select([master], [], [], 0.1)
+            if ready:
+                try:
+                    data = os.read(master, 65536)
+                except OSError:
+                    break
+                if not data:
+                    break
+                transcript.extend(data)
+            elif process.poll() is not None:
+                break
+        return process.wait(timeout=2), transcript.decode()
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        os.close(master)
+
+
+def test_real_tty_task_selection_then_confirmation_without_dev_tty(workspace, tmp_path):
+    env, log = env_for(workspace, tmp_path)
+    status, transcript = pty_invoke(workspace, env, [], b"1\nyes\n")
+    assert status == 0, transcript
+    assert "Task:" in transcript and "Continue with these limitations?" in transcript
+    assert len(calls(log)) == 1
+
+
+def test_real_tty_decline_is_a_normal_exit(workspace, tmp_path):
+    env, log = env_for(workspace, tmp_path)
+    status, transcript = pty_invoke(workspace, env, [], b"1\nn\n")
+    assert status == 0, transcript
+    assert "Launch cancelled." in transcript and "error:" not in transcript
+    assert not log.exists()
+    assert not workspace.generated_dir.exists()
+
+
+def test_redirected_prompt_uses_controlling_tty_for_both_questions(workspace, tmp_path):
+    env, log = env_for(workspace, tmp_path)
+    env["FAKE_AGY_READ_STDIN"] = "1"
+    prompt = b"Original model input, not a task selection or consent.\n"
+    status, transcript = pty_invoke(workspace, env, [], b"1\ny\n", redirected_input=prompt)
+    assert status == 0, transcript
+    assert calls(log)[0]["stdin"] == prompt.decode()
+
+
+def test_invalid_confirmation_answer_reprompts(workspace, monkeypatch):
+    output = io.StringIO()
+    monkeypatch.setattr("agy.adapter.terminal_streams", lambda: nullcontext((io.StringIO("maybe\ny\n"), output)))
+    AgyAdapter(workspace).confirm_launch("all-lazy", continuation=False)
+    assert "Please enter y or n" in output.getvalue()
+
+
+def test_keyboard_interrupt_cancels_without_traceback(workspace, monkeypatch, capsys):
+    from agy.cli import main
+    def interrupted(*args, **kwargs):
+        raise KeyboardInterrupt
+    monkeypatch.setenv("MEMORY_WORKSPACE", str(workspace.root))
+    monkeypatch.setattr(AgyAdapter, "confirm_launch", interrupted)
+    assert main(["--task", "all-lazy"]) == 130
+    assert capsys.readouterr().err == "\nLaunch cancelled.\n"
 
 
 def test_confirmed_launch_composes_rules_and_cleans_private_artifacts(workspace, tmp_path):

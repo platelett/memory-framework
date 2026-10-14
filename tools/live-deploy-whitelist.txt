@@ -5,6 +5,7 @@ clients/agy/__init__.py
 clients/agy/adapter.py
 clients/agy/cli.py
 clients/agy/snapshot.py
+clients/agy/terminal.py
 clients/base.py
 clients/claude/__init__.py
 clients/claude/adapter.py

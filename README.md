@@ -109,8 +109,9 @@ bin/memory-agy --snapshot all-lazy /path/to/new-agy-snapshot
 
 `memory-agy` uses a generated custom main agent selected with `agy --agent`.
 Each normal or Auto launch displays its limitations and asks `Continue ... [y/N]`
-on the controlling terminal before any model call or annotation classification.
+using interactive stdin or the controlling terminal before any model call or annotation classification.
 Only `y` or `yes` proceeds. Redirected prompt input is never used as consent.
+Declining, pressing Enter or ending input cancels normally; Ctrl+C exits without a traceback.
 Headless callers must supply `--accept-limitations` before native CLI arguments;
 this accepts only that invocation and still prints the limitations to stderr.
 An Auto handoff displays the selected task and confirms the second phase too.

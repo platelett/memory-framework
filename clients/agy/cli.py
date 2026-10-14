@@ -16,6 +16,7 @@ sys.path.insert(0, str(FRAMEWORK_ROOT / "clients"))
 from base import load_handoff  # noqa: E402
 from agy.adapter import AgyAdapter, default_executable  # noqa: E402
 from agy.snapshot import export_snapshot  # noqa: E402
+from agy.terminal import LaunchCancelled, terminal_streams  # noqa: E402
 from codex.adapter import CodexAdapter  # noqa: E402
 from memory_framework.errors import MemoryFrameworkError, ValidationError  # noqa: E402
 from memory_framework.workspace import Workspace, discover_workspace  # noqa: E402
@@ -188,35 +189,27 @@ def _list(adapter: AgyAdapter) -> None:
 
 def _interactive_choice(adapter: AgyAdapter) -> tuple[str, str]:
     tasks = list(adapter.available_tasks().items())
-    opened_terminal = None
     try:
-        if sys.stdin.isatty():
-            input_stream = sys.stdin
-            output_stream = sys.stdout if sys.stdout.isatty() else sys.stderr
-        else:
-            try:
-                opened_terminal = open("/dev/tty", "r+", encoding="utf-8", buffering=1)
-            except OSError as exc:
-                raise ValidationError(
-                    "memory task selection requires a terminal; use --task TASK or --auto"
-                ) from exc
-            input_stream = output_stream = opened_terminal
-        print("Select a memory task type:", file=output_stream)
-        for index, (task_id, task) in enumerate(tasks, start=1):
-            marker = "built-in" if task.built_in else "standard"
-            print(f"  {index}. {task_id} [{marker}] - {task.title}", file=output_stream)
-        print(
-            f"  {len(tasks) + 1}. auto - automatic routing and memory administration",
-            file=output_stream,
-        )
-        output_stream.write("Task: ")
-        output_stream.flush()
-        choice = input_stream.readline().strip()
-        if not choice:
-            raise ValidationError("memory task selection ended without a choice")
-    finally:
-        if opened_terminal is not None:
-            opened_terminal.close()
+        with terminal_streams() as (input_stream, output_stream):
+            print("Select a memory task type:", file=output_stream)
+            for index, (task_id, task) in enumerate(tasks, start=1):
+                marker = "built-in" if task.built_in else "standard"
+                print(f"  {index}. {task_id} [{marker}] - {task.title}", file=output_stream)
+            print(
+                f"  {len(tasks) + 1}. auto - automatic routing and memory administration",
+                file=output_stream,
+            )
+            output_stream.write("Task: ")
+            output_stream.flush()
+            choice = input_stream.readline().strip()
+            if not choice:
+                raise LaunchCancelled("No task selected. Launch cancelled.")
+    except OSError as exc:
+        raise ValidationError(
+            "Could not open an interactive terminal to select a memory task.\n"
+            "Run agy in a terminal, or select a task explicitly:\n"
+            "  agy --task all-lazy --accept-limitations"
+        ) from exc
     if choice == "auto":
         return "auto", ""
     if choice.isdigit():
@@ -397,6 +390,12 @@ def main(argv: list[str] | None = None) -> int:
                 "use --raw only for an explicit memory bypass"
             )
         _run_auto(adapter, memory.remaining)
+    except LaunchCancelled as exc:
+        print(str(exc), file=sys.stderr)
+        return 0
+    except KeyboardInterrupt:
+        print("\nLaunch cancelled.", file=sys.stderr)
+        return 130
     except MemoryFrameworkError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

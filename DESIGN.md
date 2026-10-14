@@ -755,8 +755,9 @@ session. Auto continuation cannot create a second task handoff.
 
 `memory-agy` supports task selection, Auto new-request handoff, utility passthrough, explicit
 raw mode and snapshots. Before a normal/Auto process or its annotation preflight starts, it
-describes the selected mode and limitations and asks for confirmation on the controlling
-terminal. The default is cancellation; redirected stdin cannot supply consent. Headless callers
+describes the selected mode and limitations and asks for confirmation using interactive stdin,
+falling back to separate controlling-terminal read/write streams when stdin is redirected.
+The default is normal cancellation; redirected stdin cannot supply consent. Headless callers
 use `--accept-limitations` for this invocation. An Auto handoff confirms its target separately.
 
 The adapter materializes the complete rendered view and applicable standalone global/ancestor
