@@ -38,6 +38,8 @@ def export_snapshot(
     output_dir: Path | str,
     *,
     include_local: bool = False,
+    entry_filename: str = "CLAUDE.md",
+    client_name: str = "claude",
 ) -> Path:
     """Export a framework-free Claude Code snapshot for one task."""
     target = Path(output_dir).expanduser().resolve()
@@ -75,7 +77,7 @@ def export_snapshot(
 
     temporary = Path(tempfile.mkdtemp(prefix=f".{target.name}.", dir=target.parent))
     try:
-        (temporary / "CLAUDE.md").write_bytes(entry_bytes)
+        (temporary / entry_filename).write_bytes(entry_bytes)
         write_snapshot_reader(workspace, temporary)
         for record in loaded + lazy:
             destination = temporary / record.relative_path
@@ -103,11 +105,11 @@ def export_snapshot(
             )
         manifest = {
             "version": 2,
-            "client": "claude",
+            "client": client_name,
             "task": {"id": task.id, "hash": task.content_hash},
             "include_local": include_local,
             "entry": {
-                "path": "CLAUDE.md",
+                "path": entry_filename,
                 "bytes": len(entry_bytes),
                 "sha256": hashlib.sha256(entry_bytes).hexdigest(),
             },

@@ -70,6 +70,9 @@ An adapter owns:
 
 Codex and Claude Code are full local adapters. Each uses the client's documented
 per-invocation instruction surface; unsupported launch behavior is explicit rather than guessed.
+Antigravity has an explicitly acknowledged custom-main-agent adapter. It shares the file-prompt
+lifecycle implementation, with client-specific preferences and registrations, but requires
+startup consent for the native instruction, tool and resume differences described below.
 
 ### 3.3 Instruction environments
 
@@ -584,7 +587,7 @@ directories; they never share a mutable progress file and never directly edit
 a live matrix. There is no generation tree, `HEAD`, audit agent, derived-view
 publication protocol, or garbage collection protocol.
 
-## 9. Codex and Claude Code adapters
+## 9. Client adapters
 
 ### 9.1 Normal launch
 
@@ -747,6 +750,35 @@ Resume and continue invocations receive the selected prompt again. Because their
 conversation can still contain prior task context, the wrapper warns that selection must match
 the session's original Memory mode; changing tasks or loading revised memory requires a new
 session. Auto continuation cannot create a second task handoff.
+
+### Antigravity client boundary
+
+`memory-agy` supports task selection, Auto new-request handoff, utility passthrough, explicit
+raw mode and snapshots. Before a normal/Auto process or its annotation preflight starts, it
+describes the selected mode and limitations and asks for confirmation on the controlling
+terminal. The default is cancellation; redirected stdin cannot supply consent. Headless callers
+use `--accept-limitations` for this invocation. An Auto handoff confirms its target separately.
+
+The adapter materializes the complete rendered view and applicable standalone global/ancestor
+instruction files into a unique custom main agent. It preserves basic coding/web tools and
+native tool approval, not the default agent's arbitrary MCP or orchestration capabilities.
+The native rules subsystem retains its own size and discovery limits. No Memory record is
+relabelled or truncated to meet those limits. Long-context/post-compaction retention is not
+claimed. These limitations are disclosed before launch, rather than silently claiming parity.
+
+The registered agent file is mode 0600 in an owner-only directory under the native global
+agent discovery root. PID/start-time leases and a content hash allow cleanup without removing
+another live launch or a modified file. The adapter removes its artifact after the process
+exits; native conversation storage can retain its copied system prompt.
+
+In native 1.3.5 tests, restoring the same conversation retains its original agent prompt despite
+a changed definition passed at startup. Resume therefore requires the explicit limitation
+confirmation and advises keeping the original task. It does not promise to replace prior
+Memory. Auto continuation cannot hand off. Annotation preflight uses the existing Codex
+classifier and parent-owned atomic publication, matching the Claude integration.
+
+Snapshots use `AGENTS.md` and remain subject to the native rules subsystem's limits. Snapshots
+are data export only: they do not execute an agent and need no model-start confirmation.
 
 ## 10. Read-only task snapshots
 

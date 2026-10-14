@@ -1,5 +1,10 @@
 bin/memory-codex
 bin/memory-claude
+bin/memory-agy
+clients/agy/__init__.py
+clients/agy/adapter.py
+clients/agy/cli.py
+clients/agy/snapshot.py
 clients/base.py
 clients/claude/__init__.py
 clients/claude/adapter.py
@@ -15,6 +20,7 @@ lib/memory_framework/__init__.py
 lib/memory_framework/annotations.py
 lib/memory_framework/errors.py
 lib/memory_framework/models.py
+lib/memory_framework/migrations.py
 lib/memory_framework/parsing.py
 lib/memory_framework/preflight.py
 lib/memory_framework/relabel.py

@@ -5,7 +5,8 @@ annotation matrices are authoritative; generated views and client profiles are d
 It ships with only the virtual task types `all-lazy` and `all-eager`.
 
 Requirements: Python 3.12+, POSIX file locking, and (for launching) a current Codex CLI or
-Claude Code CLI.
+Claude Code CLI, or Antigravity CLI. Claude and Antigravity annotation preflight currently
+also require Codex when selected-task annotations are pending or stale.
 
 ## Framework and data boundary
 
@@ -94,7 +95,51 @@ bin/memory-claude --raw --print "request"
 bin/memory-claude --version       # automatic utility passthrough; no --raw needed
 bin/memory-claude --list
 bin/memory-claude --snapshot all-lazy /path/to/new-claude-snapshot
+
+bin/memory-agy                   # task selector, then explicit startup confirmation
+bin/memory-agy --task all-lazy
+bin/memory-agy --auto "request"
+bin/memory-agy --task all-lazy --accept-limitations -p "request"
+bin/memory-agy --task all-lazy --conversation SESSION_ID
+bin/memory-agy --raw --agent my-agent
+bin/memory-agy --snapshot all-lazy /path/to/new-agy-snapshot
 ```
+
+### Antigravity startup confirmation
+
+`memory-agy` uses a generated custom main agent selected with `agy --agent`.
+Each normal or Auto launch displays its limitations and asks `Continue ... [y/N]`
+on the controlling terminal before any model call or annotation classification.
+Only `y` or `yes` proceeds. Redirected prompt input is never used as consent.
+Headless callers must supply `--accept-limitations` before native CLI arguments;
+this accepts only that invocation and still prints the limitations to stderr.
+An Auto handoff displays the selected task and confirms the second phase too.
+Utility commands, `--list`, snapshots and explicit `--raw` need no confirmation.
+
+The generated agent contains the full selected Memory view, global standalone
+`AGENTS.md`/`GEMINI.md`, and those files on the launch directory's ancestry.
+It has file, shell and web tools, with native tool approval required; it does
+not inherit arbitrary custom-agent tools, MCP tools or subagent orchestration.
+Other native modular rules retain Antigravity's own discovery and limits:
+24,000 bytes per rule file and a 20,000-token aggregate rule budget can truncate
+or demote rules. These are native rule limits, not a truncation performed by
+the Memory renderer. Long-context and post-compaction retention remain unverified.
+
+On resume/continue, Antigravity 1.3.5 can retain the original agent prompt even
+when a newly generated agent is passed. The confirmation explicitly warns that
+the newly selected task or revised Memory might not replace the session's old
+context. Keep the original task; start a new session to load revised Memory.
+Auto continuation cannot hand off to a different task. Remote-control sessions
+and user-supplied `--agent` require `--raw`; Auto stream-json input is rejected.
+
+Generated agents use unique owner-only files in `~/.gemini/config/agents/`;
+their leases and prompts live in `.memory/state/clients/agy/` and
+`.memory/generated/clients/agy/`. Normal exit removes only that invocation's
+files. PID/start-time ownership and content hashes protect concurrent launches
+and cleanup after interruption. Session transcripts may retain copied prompts.
+`MEMORY_AGY_BIN` selects the underlying executable. A shell dispatcher should
+honor `MEMORY_AGY_ACTIVE=1` to avoid recursive wrapping and preserve ADC variables.
+Snapshots use `AGENTS.md`; native rule size limits still apply when opening them.
 
 The Claude Code wrapper has the same Memory modes and two-phase Auto behavior. For normal and
 Auto launches it creates one owner-only, launch-unique Markdown artifact under

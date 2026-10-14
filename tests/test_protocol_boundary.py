@@ -135,6 +135,7 @@ def test_embedded_commands_use_parent_bank_from_unrelated_cwd(tmp_path):
     for relative, args in [
         ("bin/memory-codex", ["--list"]),
         ("bin/memory-claude", ["--list"]),
+        ("bin/memory-agy", ["--list"]),
         ("skills/maintain-memory/scripts/cleanup_artifacts.py", ["--dry-run"]),
     ]:
         result = subprocess.run([sys.executable, str(framework / relative), *args],

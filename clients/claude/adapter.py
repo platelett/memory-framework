@@ -36,6 +36,8 @@ def _process_start_time(pid: int) -> str | None:
 class ClaudeAdapter:
     """Render and inject task-bound Memory views into Claude Code."""
 
+    client_id = "claude"
+
     def __init__(
         self,
         workspace: Workspace,
@@ -58,19 +60,19 @@ class ClaudeAdapter:
 
     @property
     def launches_dir(self) -> Path:
-        return self.workspace.generated_dir / "clients" / "claude" / "launches"
+        return self.workspace.generated_dir / "clients" / self.client_id / "launches"
 
     @property
     def preferences_path(self) -> Path:
-        return self.workspace.state_dir / "clients" / "claude" / "preferences.json"
+        return self.workspace.state_dir / "clients" / self.client_id / "preferences.json"
 
     @property
     def preferences_lock_path(self) -> Path:
-        return self.workspace.state_dir / "clients" / "claude" / "preferences.lock"
+        return self.workspace.state_dir / "clients" / self.client_id / "preferences.lock"
 
     @property
     def registrations_dir(self) -> Path:
-        return self.workspace.state_dir / "clients" / "claude" / "registrations"
+        return self.workspace.state_dir / "clients" / self.client_id / "registrations"
 
     def available_tasks(self) -> dict[str, object]:
         tasks: dict[str, object] = dict(BUILT_IN_TASKS)
@@ -107,7 +109,7 @@ class ClaudeAdapter:
         target = (
             self.workspace.generated_dir
             / "clients"
-            / "claude"
+            / self.client_id
             / task_id
             / "instructions.md"
         )
