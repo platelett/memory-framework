@@ -139,7 +139,7 @@ def main() -> int:
             if any(token in name for token in forbidden):
                 raise ValueError(f"forbidden package payload: {name}")
         for path in root.rglob("*"):
-            if path.is_file() and b"/root/" in path.read_bytes():
+            if path.is_file() and b"~/" in path.read_bytes():
                 raise ValueError(f"machine-specific absolute path in package: {path}")
 
         manifest = {

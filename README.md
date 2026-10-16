@@ -33,7 +33,7 @@ For a Git-managed workspace, install the framework as a submodule and initialize
 from the workspace root:
 
 ```bash
-git submodule add -b main https://github.com/platelett/memory-framework.git .memory/framework
+# The framework is already embedded at .memory/framework in this workspace.
 python3 .memory/framework/scripts/memory.py init
 git add .gitmodules .memory
 git commit -m "Initialize workspace memory"
